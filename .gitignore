@@ -46,3 +46,7 @@ autoresearch/tests/probe_*/
 .autoresearch/_diag_acl*/
 .autoresearch/_smoke_*/
 
+# 测试/CLI 探测可能留下的空目录（内容为空，但不该出现在 git status 里）
+tmp/
+.doctor_probe/
+.fetch_tectonic/
