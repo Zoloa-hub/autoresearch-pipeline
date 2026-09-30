@@ -1,0 +1,31 @@
+name: 功能建议
+description: 提议一个新能力或改进
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你想解决什么问题
+      description: 请描述场景而不是直接给方案——场景能帮我们判断这是否该在适配器层解决。
+    validations:
+      required: true
+  - type: dropdown
+    id: layer
+    attributes:
+      label: 你认为这属于哪一层
+      options:
+        - 编排层（阶段、图引擎、断点续跑）
+        - 实验后端（适配器协议、沙箱执行）
+        - 写作与评审（提示词、LaTeX、评审标准）
+        - 分析（指标、制图、统计口径）
+        - 检索（文献源、去重、综述）
+        - 其他 / 不确定
+    validations:
+      required: true
+  - type: textarea
+    id: alternative
+    attributes:
+      label: 你现在的替代做法
+      description: 比如是否已用自定义适配器绕过？这能帮我们判断通用需求是否真实存在。
+    validations:
+      required: false

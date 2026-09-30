@@ -1,0 +1,203 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.10", "3.12", "3.13"]
+        exclude:
+          # macOS 上只跑一个版本：既省 CI 分钟，又保留"非 Linux、非 Windows"这一档覆盖
+          - os: macos-latest
+            python-version: "3.10"
+          - os: macos-latest
+            python-version: "3.13"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # 关键设计：**不安装任何第三方依赖**。
+      # 七个测试套件必须能在裸 Python 上全绿——这是"零强制依赖"这个承诺的
+      # 可执行证据，也是新用户 `pip install` 之前就能 `python -m autoresearch.cli demo`
+      # 跑通全流程的前提。装了依赖反而会掩盖降级路径的回归。
+      - name: Show interpreter
+        run: python -VV
+
+      - name: Smoke — CLI surface
+        run: python -m autoresearch.cli stages --json
+
+      - name: Suite 1/7 — config + LLM layer
+        run: python -m autoresearch.tests.test_config_llm
+
+      - name: Suite 2/7 — retrieval + PDF parsing
+        run: python -m autoresearch.tests.test_retrieve
+
+      - name: Suite 3/7 — sandbox + LaTeX
+        run: python -m autoresearch.tests.test_sandbox_latex
+
+      - name: Suite 4/7 — figures + metrics
+        run: python -m autoresearch.tests.test_figures_metrics
+
+      - name: Suite 5/7 — prompt library + templates
+        run: python -m autoresearch.tests.test_prompts
+
+      - name: Suite 6/7 — experiment adapters
+        run: python -m autoresearch.tests.test_adapters
+
+      - name: Suite 7/7 — end-to-end pipeline (mock LLM, offline)
+        run: python -m autoresearch.tests.test_pipeline
+
+      # 裸环境跑完之后，确认降级路径确实**跳过**了而不是**悄悄通过**。
+      # 没有这一步，一个「把绘图断言删掉」的提交也能让上面的 job 全绿。
+      - name: Assert optional-dependency skips are reported
+        run: |
+          python - <<'PY'
+          import re, subprocess, sys
+          out = subprocess.run(
+              [sys.executable, "-m", "autoresearch.tests.test_figures_metrics"],
+              capture_output=True, text=True, encoding="utf-8", errors="replace",
+          ).stdout
+          assert "SKIPPED" in out, "裸环境下应当明确报告跳过，而不是静默通过"
+          assert re.search(r"PASSED \d+ checks", out), "测试仍应实际执行并给出计数"
+          print("skip reporting ok")
+          PY
+
+  # 第二个 job：装上可选依赖再跑一遍受影响的套件。
+  #
+  # 为什么必须两个 job 都保留：
+  #   * 只跑裸环境 → 绘图与 PDF 解析代码**完全没有 CI 信号**（跳过不等于测过）；
+  #   * 只跑装好依赖的环境 → "零强制依赖" 这条不变量失去可执行证据。
+  # 两个一起跑，才既守住不变量又真的覆盖到那些代码路径。
+  extras:
+    name: extras (optional deps installed) — py${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install optional extras
+        run: python -m pip install --upgrade ".[figures,pdf,http]"
+
+      - name: figures + metrics — full (incl. real plotting)
+        run: python -m autoresearch.tests.test_figures_metrics
+
+      - name: retrieval + PDF parsing — full (incl. real PDF via PyMuPDF)
+        run: python -m autoresearch.tests.test_retrieve
+
+      - name: end-to-end pipeline with figures enabled
+        run: python -m autoresearch.tests.test_pipeline
+
+      - name: Assert nothing was skipped
+        run: |
+          python - <<'PY'
+          import subprocess, sys
+          for mod in ("test_figures_metrics", "test_retrieve"):
+              r = subprocess.run(
+                  [sys.executable, "-m", f"autoresearch.tests.{mod}"],
+                  capture_output=True, text=True, encoding="utf-8", errors="replace",
+              )
+              assert r.returncode == 0, f"{mod} failed:\n{r.stdout[-2000:]}"
+              assert "SKIPPED" not in r.stdout, (
+                  f"{mod} 报告了跳过，但这个 job 装了 [figures,pdf]——"
+                  f"说明依赖没装上或导入名写错了:\n{r.stdout[-1500:]}"
+              )
+          print("no skips with extras installed")
+          PY
+
+  packaging:
+    name: packaging (sdist + wheel + cli entry point)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # pyproject.toml 的包清单/包数据一旦写错，用户 `pip install` 后会缺提示词或
+      # 模板，直到运行时才炸。这里真的构建并安装，然后检查关键资源是否存在。
+      - name: Build
+        run: |
+          python -m pip install --upgrade build
+          python -m build
+
+      - name: Install the wheel
+        run: python -m pip install dist/*.whl
+
+      - name: Verify packaged resources and entry point
+        run: |
+          python -c "import autoresearch, pathlib; p = pathlib.Path(autoresearch.__file__).parent; assert (p/'prompts'/'s1_queries.md').is_file(), 'prompts missing'; assert (p/'templates'/'paper'/'main.tex').is_file(), 'paper template missing'; assert (p/'templates'/'experiment'/'train.py').is_file(), 'experiment template missing'; print('resources ok')"
+          autoresearch stages --json > /dev/null && echo "entry point ok"
+          autoresearch doctor --json || true
+
+  lint:
+    name: static checks (compile + import hygiene)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # 不引入 ruff/mypy 这类会随版本漂移的门禁；只查"装上就能跑"的硬事实：
+      # 语法正确、导入完整、没有把密钥写进仓库。
+      - name: Byte-compile every module
+        run: python -m compileall -q autoresearch
+
+      - name: Import every module
+        run: |
+          python - <<'PY'
+          import importlib, pathlib, sys
+          root = pathlib.Path("autoresearch")
+          failed = []
+          for path in sorted(root.rglob("*.py")):
+              if "__pycache__" in path.parts:
+                  continue
+              if path.name.startswith("test_") or path.parent.name == "tests":
+                  continue
+              mod = ".".join(path.with_suffix("").parts)
+              try:
+                  importlib.import_module(mod)
+              except Exception as exc:
+                  failed.append(f"{mod}: {type(exc).__name__}: {exc}")
+          if failed:
+              print("\n".join(failed))
+              sys.exit(1)
+          print("all modules import cleanly")
+          PY
+
+      - name: No committed secrets
+        run: |
+          # .env 必须被 gitignore 挡住；仓库里出现 sk- 开头的密钥即 CI 失败。
+          if git ls-files --error-unmatch .env >/dev/null 2>&1; then
+            echo "::error::.env is tracked by git — secrets must never be committed"
+            exit 1
+          fi
+          if git grep -nIE '(sk-[A-Za-z0-9]{16,}|DEEPSEEK_API_KEY=[^[:space:]]|OPENAI_API_KEY=sk-)' -- . ':!*.md' ':!*.example' ':!.env.example'; then
+            echo "::error::possible committed API key"
+            exit 1
+          fi
+          echo "no committed secrets found"

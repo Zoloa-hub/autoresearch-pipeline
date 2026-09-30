@@ -1,0 +1,63 @@
+name: Bug 报告
+description: 报告一个可复现的缺陷
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。提交前请先确认这不是已知的未验证路径
+        （见 CHANGELOG 顶部：CI 运行时语义、POSIX 分支、PDF 编译闭环）。
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么
+      description: 实际行为，以及你期望的行为。
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 最小复现步骤
+      description: |
+        请给出可直接执行的命令。若与实验适配器有关，附上适配器文件
+        或至少 `describe()` 的输出。
+      placeholder: |
+        1. python -m autoresearch.cli doctor
+        2. python -m autoresearch.cli run --direction "..." --llm-provider mock --offline
+        3. 观察到 ...
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: "`cli doctor` 输出"
+      description: 运行 `python -m autoresearch.cli doctor` 并粘贴结果；它会一次性说明环境能力与降级情况。
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: events
+    attributes:
+      label: 相关事件日志
+      description: |
+        `events.jsonl` 里的相关行（**请先删掉任何密钥**）。
+        事件日志是这套管线的审计底座，通常比堆栈更有定位价值。
+      render: json
+    validations:
+      required: false
+  - type: input
+    id: env
+    attributes:
+      label: 环境
+      placeholder: "OS / Python 版本 / 是否装了第三方依赖 / LLM provider"
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前确认
+      options:
+        - label: 我**没有**在报告里粘贴真实 API Key
+          required: true
+        - label: 我已确认问题不在 CHANGELOG 的"已知未验证"清单里
+          required: true

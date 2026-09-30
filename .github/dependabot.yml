@@ -1,0 +1,22 @@
+version: 2
+updates:
+  # Python 依赖：核心 dependencies = []，但可选依赖组与开发工具会漂移
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    groups:
+      # 把可选依赖的补丁/小版本合并成一个 PR，避免噪音淹没真正需要看的变化
+      minor-and-patch:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
+    labels: ["dependencies"]
+
+  # GitHub Actions：三平台矩阵里 actions 的版本升级值得跟踪
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "ci"]

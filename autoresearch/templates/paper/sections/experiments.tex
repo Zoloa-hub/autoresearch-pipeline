@@ -1,0 +1,37 @@
+% Experiments -- stage s6, prompt s6_section (section_name=experiments).
+% TODO: datasets and splits, baselines, implementation details, metrics,
+%       compute budget, and the exact protocol (epochs, seeds, hyperparameters).
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Datasets}
+% TODO: name, source, size, and split for each dataset. No runtime downloads;
+%       datasets are local artifacts listed in the run manifest.
+
+\subsection{Baselines and Metrics}
+% TODO: the strongest reasonable comparison, described precisely enough to
+%       reimplement, plus the primary and secondary metrics with their
+%       direction of improvement.
+
+\subsection{Implementation Details}
+% TODO: model size, optimizer, learning rate, batch size, epochs, hardware,
+%       and the seed policy (how many seeds, shared across all arms).
+
+\subsection{Protocol}
+% TODO: run order and success criteria per milestone; note which runs are
+%       single-seed and which are averaged.
+
+\begin{table}[t]
+  \centering
+  \caption{Main results. Fill via \texttt{tools/metrics.py::to\_latex\_table}.}
+  \label{tab:main_results}
+  \begin{tabular}{lcc}
+    \toprule
+    Method & Accuracy (\%) & Macro-F1 (\%) \\
+    \midrule
+    % TODO: one row per method, best value in \textbf{bold}.
+    Baseline & -- & -- \\
+    Ours     & -- & -- \\
+    \bottomrule
+  \end{tabular}
+\end{table}

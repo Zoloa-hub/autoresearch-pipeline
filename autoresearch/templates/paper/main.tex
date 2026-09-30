@@ -1,0 +1,85 @@
+% ---------------------------------------------------------------------------
+% Auto-Research paper skeleton (venue-neutral).
+%
+% Pipeline-injected placeholders -- plain string replacement, no LaTeX escaping
+% is applied by the pipeline, so keep the replacement text LaTeX-safe:
+%   __TITLE__    -> paper title (no \ commands needed)
+%   __AUTHORS__  -> author line, e.g. "A. Author \\ Affiliation"
+%   __ABSTRACT__ -> abstract body; separate paragraphs with a blank line
+%   __KEYWORDS__ -> keyword list, e.g. "machine learning, optimization"
+%   __DATE__     -> date string
+% The preamble/body is otherwise fully self-contained.
+% ---------------------------------------------------------------------------
+\documentclass[11pt]{article}
+
+% --- engine-agnostic input encoding ---------------------------------------
+\RequirePackage{iftex}
+\ifPDFTeX
+  \usepackage[utf8]{inputenc}
+  \usepackage[T1]{fontenc}
+\fi
+
+% --- layout ---------------------------------------------------------------
+\usepackage[margin=1in]{geometry}
+
+% --- math -----------------------------------------------------------------
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
+
+% --- floats, tables, figures ---------------------------------------------
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+
+% --- bibliography ---------------------------------------------------------
+\usepackage{natbib}
+\bibliographystyle{plainnat}
+
+% --- links and colour -----------------------------------------------------
+\usepackage[hidelinks]{hyperref}
+\usepackage{xcolor}
+
+% --- theorems -------------------------------------------------------------
+\newtheorem{theorem}{Theorem}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+% --- convenience ----------------------------------------------------------
+\usepackage{xspace}
+\newcommand{\method}{METHODNAME\xspace}
+\graphicspath{{figures/}{figs/}}
+\setcitestyle{authoryear,round,semicolon,aysep={,},yysep={;}}
+
+\title{__TITLE__}
+\author{__AUTHORS__}
+\date{__DATE__}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+\noindent
+__ABSTRACT__
+\end{abstract}
+
+\noindent\textbf{Keywords:} __KEYWORDS__
+
+\input{sections/introduction}
+\input{sections/related_work}
+\input{sections/method}
+\input{sections/experiments}
+\input{sections/results}
+\input{sections/discussion}
+\input{sections/limitations}
+\input{sections/conclusion}
+
+\bibliography{references}
+
+\end{document}

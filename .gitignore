@@ -1,0 +1,48 @@
+# ---- 机密：绝不入库 ----
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+credentials.json
+
+# ---- 运行产物 ----
+.autoresearch/
+autoresearch/**/__pycache__/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ---- 大体积运行时下载物：绝不入库 ----
+# tectonic 单文件二进制约 48 MB，由 `LatexCompiler.install_tectonic()` 在运行时
+# 按需下载。把二进制放进版本控制会让仓库膨胀、跨平台污染（同一个路径下
+# Windows/Linux/macOS 需要不同的可执行文件），而且它随时可以重新下载。
+autoresearch/vendor/
+vendor/
+*.exe
+*.dll
+*.dylib
+*.so
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- 沙箱环境下产生的空目录 ----
+# 本项目的测试在 Windows 沙箱里跑过，某些由 tempfile 创建的目录会进入
+# "永远拒绝访问"的状态，连删除都不可能。git 不跟踪空目录，所以它们不会入库；
+# 这里仍然显式列出，避免有人在别处重新用到这些名字。
+autoresearch/_p3/
+autoresearch/tests/probe_*/
+.autoresearch/_diag_acl*/
+.autoresearch/_smoke_*/
+

@@ -1,0 +1,27 @@
+# 统一换行符为 LF。三平台矩阵里 ubuntu/macos 跑 LF，而 Windows 默认
+# core.autocrlf=true 会在提交时转成 CRLF；本仓库有多处按字节比较的断言
+# （提示词围栏计数、LaTeX 花括号配平、产物 sha256），换行符不一致会让它们
+# 在 Linux 上以极难归因的方式失败。
+* text=auto eol=lf
+
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.pdf   binary
+*.zip   binary
+*.gz    binary
+*.tar   binary
+*.exe   binary
+*.dll   binary
+*.dylib binary
+*.so    binary
+
+*.ps1   text eol=crlf
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+
+autoresearch/vendor/**  linguist-vendored
+*.bib                   linguist-language=TeX
+
+.autoresearch/**  export-ignore

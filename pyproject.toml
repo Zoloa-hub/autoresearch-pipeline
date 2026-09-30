@@ -1,0 +1,100 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autoresearch-pipeline"
+version = "0.1.0"
+description = "Auditable, resumable automated research pipeline: literature review, ideation, sandboxed experiments, LaTeX writing, automated review, and numeric provenance checking."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Auto-Research contributors" }]
+keywords = [
+    "automated-research", "llm-agents", "pipeline", "reproducibility",
+    "literature-review", "latex", "peer-review", "provenance",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# 核心运行时**零第三方依赖**：mock LLM + 离线检索 + 子进程沙箱 + 无 LaTeX 引擎
+# 时仍能跑完整条管线（`autoresearch demo`）。所有额外能力都是可选依赖组。
+dependencies = []
+
+[project.optional-dependencies]
+# 接真实模型（OpenAI / DeepSeek / 任意 OpenAI 兼容端点）
+llm = ["openai>=1.30"]
+# 制图与统计汇总（缺了会降级为内联统计，不制图）
+figures = ["matplotlib>=3.7", "pandas>=2.0"]
+# PDF 全文解析（文献处理）
+pdf = ["PyMuPDF>=1.23"]
+# 图表/表格中文字体（Windows 通常已自带，Linux CI 需要显式装）
+cjk = ["matplotlib>=3.7"]
+# 更快的 HTTP（缺了走标准库 urllib）
+http = ["requests>=2.31"]
+# 开发与测试
+dev = ["pytest>=7.4"]
+# 一切
+all = [
+    "openai>=1.30",
+    "matplotlib>=3.7",
+    "pandas>=2.0",
+    "PyMuPDF>=1.23",
+    "requests>=2.31",
+    "pytest>=7.4",
+]
+
+[project.urls]
+Homepage = "https://github.com/example/autoresearch-pipeline"
+Documentation = "https://github.com/example/autoresearch-pipeline/blob/main/autoresearch/README.md"
+Issues = "https://github.com/example/autoresearch-pipeline/issues"
+
+[project.scripts]
+autoresearch = "autoresearch.cli:main"
+
+# 第三方包可以通过这个入口点注册自己的实验适配器：
+#   [project.entry-points."autoresearch.adapters"]
+#   my-sim = "my_package.adapters:MySimAdapter"
+[project.entry-points."autoresearch.adapters"]
+
+[tool.setuptools]
+packages = [
+    "autoresearch",
+    "autoresearch.adapters",
+    "autoresearch.graph",
+    "autoresearch.llm",
+    "autoresearch.stages",
+    "autoresearch.tools",
+]
+
+[tool.setuptools.package-data]
+autoresearch = [
+    "prompts/*.md",
+    "templates/paper/*.tex",
+    "templates/paper/*.bib",
+    "templates/paper/*.md",
+    "templates/paper/*.py",
+    "templates/paper/sections/*.tex",
+    "templates/experiment/*.py",
+    "templates/experiment/*.md",
+    "*.md",
+]
+
+[tool.pytest.ini_options]
+# 每个套件既是可独立运行的脚本，也是 pytest 可收集的测试。
+# 它们**全部不需要网络与 API Key**，这是设计目标而不是巧合——CI 才能三平台绿灯。
+testpaths = ["autoresearch/tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-q"
