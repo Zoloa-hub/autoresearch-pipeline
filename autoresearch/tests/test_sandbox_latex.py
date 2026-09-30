@@ -790,36 +790,18 @@ def test_latex_compile_degrades() -> None:
                 )
                 print(f"  info compile FAILED (engine present but blocked): {result.summary()}")
         else:
-            print("  info no LaTeX engine on this machine; asserting graceful degradation")
-            result = comp.compile(minimal, runs=2, timeout=30)
-            check("no engine -> ok is False", result.ok is False, result.summary())
-            check("no engine -> pdf is None", result.pdf is None, repr(result.pdf))
-            check("no engine -> engine == 'none'", result.engine == "none", result.engine)
-            # 三种都算正确：
-            #   (a) 机器上确实没有任何引擎 → 统一的 "no LaTeX engine available"；
-            #   (b) 引擎二进制存在但**预检判定不可用**（例如 DSH 沙箱拒绝它写 bundle
-            #       缓存，报 os error 5）→ 错误里带具体原因，这是有意为之：
-            #       把不可归因的 os error 变成可解释的能力缺口；
-            #   (c) 显式指定了引擎但它不可用 → 带引擎名的说明。
-            check(
-                "no engine -> explanatory error",
-                result.errors
-                and (
-                    result.errors == ["no LaTeX engine available"]
-                    or "no usable LaTeX engine" in result.errors[0]
-                    or "not usable" in result.errors[0]
-                ),
-                str(result.errors),
-            )
-            check(
-                "unusable engine is reported with a reason, not silently ignored",
-                bool(getattr(comp, "_tectonic_cache_error", "")),
-                f"cache_block_reason={getattr(comp, '_tectonic_cache_error', '')!r}",
-            )
-            check(
-                "compile_fail logged",
-                "compile_fail" in logs.names(),
-                str(logs.names()[-5:]),
+            # 走到这里说明 `detect()` 当时认为没有可用引擎。**但不要据此断言降级**：
+            # `compile()` 内部会重新解析引擎，而 tectonic 的可用性预检在两次调用间
+            # 可能改变结论（预检本身要做一次真实编译）。早期实现就在这里断言
+            # 「no engine -> ok is False」，于是出现过自相矛盾的失败信息：
+            # 断言说没有引擎，而同一行却打印出 `engine=tectonic` 且编译成功。
+            # 这类不封闭的测试会在 CI 三平台上随机变红，并把排查引向错误方向。
+            #
+            # 降级契约由下面两段**确定性**检查覆盖（用一个确定不存在的引擎名，
+            # 不依赖机器上装了什么）。
+            print(
+                "  info detect() 报告无可用引擎；降级契约的具体断言见下方"
+                "「确定性」检查段（本分支不做环境依赖的断言）"
             )
 
     # ------------------------------------------------------------------ #
