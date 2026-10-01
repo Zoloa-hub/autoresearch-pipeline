@@ -131,10 +131,17 @@ class CompileStage(Stage):
                 errors=len(getattr(result, "errors", []) or []),
             )
 
-            if result is not None and result.ok:
-                break
-
             errors = list(getattr(result, "errors", []) or []) if result is not None else ["compiler raised"]
+
+            # 判据是「**产出 PDF 且没有抽出的错误**」，而不是只看 ok。
+            #
+            # `ok` 的含义是"产出了 PDF"：实测过，注入一个未闭合的数学模式后，
+            # tectonic 退出码仍为 0、PDF 仍被写出，同时抽出了
+            # `! Missing $ inserted.`。若只按 ok 判断，这里会立刻 break，
+            # 那个错误既不会被修，也不会进任何警告——
+            # **一篇带 LaTeX 错误的论文被静默放行**，而它是整条管线的最终产物。
+            if result is not None and result.ok and not errors:
+                break
             log_tail = clamp(str(getattr(result, "log", "") or ""), 6000) if result is not None else ""
 
             fix = self._propose_fix(state, engine, errors, log_tail, paper_dir)
@@ -159,6 +166,15 @@ class CompileStage(Stage):
 
         pdf: Path | None = getattr(result, "pdf", None) if result is not None else None
         ok = bool(result is not None and result.ok and pdf and Path(pdf).exists())
+
+        # 有 PDF 但仍有 LaTeX 错误时要**说出来**：降级交付，而不是假装干净。
+        # 这类错误会让正文出现乱码或缺失内容，而 PDF 本身完全正常打开。
+        residual = list(getattr(result, "errors", []) or []) if result is not None else []
+        if ok and residual:
+            warnings.append(
+                f"编译产出了 PDF，但仍有 {len(residual)} 条 LaTeX 错误未被修复"
+                f"（正文可能有渲染问题）：{residual[:3]}"
+            )
         final_pdf = ""
         if ok and pdf is not None:
             final_pdf = self.ctx.rel(Path(pdf))

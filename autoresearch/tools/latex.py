@@ -125,17 +125,30 @@ def _run_quiet(cmd: list[str], timeout: int = _PROBE_TIMEOUT, cwd: str | None = 
     return proc.returncode, out
 
 
-def _child_env() -> dict:
-    """Environment for LaTeX child processes.
+def _child_env(cache_dir: str | os.PathLike[str] | None = None) -> dict:
+    r"""Environment for LaTeX child processes.
 
     Forces UTF-8 on the child's stdio so non-ASCII engine messages (e.g. the
     localized Windows "access denied" text) come back readable instead of
     mojibake, and points the temp vars at the current drive so no child has to
     reach a per-user temp path.
+
+    ``cache_dir``：**必须传**。``tectonic`` 把宏包缓存放在
+    ``TECTONIC_CACHE_DIR``，不设时它用默认位置（Windows 是
+    ``%LOCALAPPDATA%\Tectonic``）——那个位置在本项目的运行环境里**不可写**，
+    于是 tectonic 既读不到已填充的缓存、也写不了新缓存，**而且不会去下载缺失宏包**，
+    直接在 TeX 层报「File `size11.clo' not found」。
+
+    这个错误指向完全错误的方向（看起来像模板缺宏包，实际是缓存目录没配对），
+    而它曾经让 s7 的编译闭环**从未收敛**。教训值得写在这里：
+    **预检必须验证生产中真正使用的那套配置**——早期预检自己设了缓存目录，
+    真实编译却没设，于是预检通过而生产失败，是个典型的虚假信心检查。
     """
     env = dict(os.environ)
     env["PYTHONIOENCODING"] = "utf-8"
     env.setdefault("PYTHONUTF8", "1")
+    if cache_dir is not None:
+        env["TECTONIC_CACHE_DIR"] = str(cache_dir)
     return env
 
 
@@ -1057,7 +1070,8 @@ class LatexCompiler:
                     errors="replace",
                     timeout=timeout,
                     cwd=str(workdir),
-                    env=_child_env(),
+                    # 必须与预检用同一个缓存目录，否则预检通过、生产失败
+                    env=_child_env(self.vendor_dir() / "tectonic_cache"),
                 )
             except subprocess.TimeoutExpired:
                 raise

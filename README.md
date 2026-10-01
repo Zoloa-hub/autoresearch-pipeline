@@ -270,10 +270,13 @@ k_at_550nm              osc_g    1.00 (n_vis 0.40)  0.75
 
 **未验证（会挡住你的具体场景）**
 
-- **PDF 编译闭环从未收敛过。** tectonic 二进制就位，但沙箱/ACL 拒绝它在新建目录里
-  写入（`os error 5`），一次成功编译都没跑通。需要在无沙箱终端跑一次
-  `autoresearch/vendor/tectonic/tectonic.exe -X compile paper/main.tex --outdir paper`
-  把 bundle 缓存建起来。**这是当前最大的未验证面。**
+- ~~PDF 编译闭环从未收敛过。~~ **已修复（2026-10）。** 真实根因不是沙箱：预检
+  `_tectonic_cache_preflight()` 自己设了 `TECTONIC_CACHE_DIR` 并验证通过，
+  而**真实编译没设**，于是 tectonic 回去用默认位置（`%LOCALAPPDATA%\Tectonic`，
+  本环境不可写）——既读不到预检填充的缓存，也不会下载缺失宏包，最终在 TeX 层报
+  `File `size11.clo' not found`，一个**指向完全错误方向**的错误。
+  **预检验证了一个生产中从不使用的配置**，是典型的虚假信心检查。
+  修复后：真实模板产出 **27 KB PDF**，且「注入错误 → 抽错 → 修复 → 重编译」闭环收敛。
 - **`comsol-batch` 的 run 模式从未执行过。** COMSOL 是商业软件，开发机与 CI 都没有；
   已验证的只有命令构造与 ingest 解析。
 - **`--sandbox docker` 只验证到命令构造。** 真实容器执行未被覆盖。
