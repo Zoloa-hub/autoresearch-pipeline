@@ -525,6 +525,28 @@ class Sandbox:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
+    def _merged_env(self, env: dict | None) -> dict:
+        """合并 ``os.environ`` 与调用方传入的 env，并强制 UTF-8 I/O。
+
+        放在基类而不是某个后端里：两个后端都需要它（子进程直接用它启动，
+        容器用它把环境传进 ``docker run``）。早期它只定义在
+        :class:`SubprocessSandbox` 上，而 :meth:`DockerSandbox.run` 也调用
+        ``self._merged_env(...)`` —— 容器后端因此一用就 ``AttributeError``。
+        这条路径长期零覆盖（开发机与 WSL 都没有 Docker），直到 CI 的 runner
+        装了 Docker 才第一次跑到。
+
+        ``PYTHONIOENCODING=utf-8`` 是必需的：实验脚本大量输出非 ASCII
+        （中文日志、指标名），在非 UTF-8 控制台下会直接崩。
+        """
+        merged = dict(os.environ)
+        merged["PYTHONUNBUFFERED"] = "1"
+        merged["PYTHONDONTWRITEBYTECODE"] = "1"
+        merged["PYTHONIOENCODING"] = "utf-8"
+        if env:
+            for k, v in env.items():
+                merged[str(k)] = "" if v is None else str(v)
+        return merged
+
     def _write_temp_script(self, code: str) -> Path:
         target = (self.tmp_dir() / f"{uuid.uuid4().hex}.py").absolute()
         target.write_text(code, encoding="utf-8")
@@ -625,15 +647,10 @@ class SubprocessSandbox(Sandbox):
         super().__init__(cfg, workdir, event_logger)
 
     # -- env --------------------------------------------------------------- #
-    def _merged_env(self, env: dict | None) -> dict:
-        merged = dict(os.environ)
-        merged["PYTHONUNBUFFERED"] = "1"
-        merged["PYTHONDONTWRITEBYTECODE"] = "1"
-        merged["PYTHONIOENCODING"] = "utf-8"
-        if env:
-            for k, v in env.items():
-                merged[str(k)] = "" if v is None else str(v)
-        return merged
+    # 注意：`_merged_env` 属于**基类**（见 Sandbox._merged_env）。
+    # 它曾经只定义在 SubprocessSandbox 上，而 DockerSandbox.run 也调用它 ——
+    # 于是容器后端一用就 AttributeError。这条路径直到 CI runner（装了 Docker）
+    # 才第一次被执行，本地（无 Docker）永远看不到。
 
     # -- resource limits (POSIX) ------------------------------------------ #
     def _make_preexec(self) -> Any:
@@ -970,9 +987,26 @@ class DockerSandbox(Sandbox):
         cpus = float(getattr(self.cfg, "cpus", 0.0) or 0.0)
         if cpus > 0:
             cmd += ["--cpus", f"{cpus:g}"]
-        cmd += ["--pids-limit", "512", self.image]
+        # `--pids-limit` 只有 **Linux 容器**支持。Windows 宿主上（Windows 容器）
+        # 传它会直接失败：
+        #     docker: invalid option: Windows does not support PidsLimit
+        # 这在 CI 的 Windows runner 上真实发生过——那条路径此前零覆盖。
+        # 无法廉价地判断"容器是 Linux 还是 Windows"，所以按**宿主**判断：
+        # POSIX 宿主默认传，Windows 宿主跳过。
+        # 跳过时如实记录这个能力缺口，而不是静默少一层保护。
+        if not IS_WINDOWS:
+            cmd += ["--pids-limit", str(self._pids_limit())]
+        cmd += [self.image]
         cmd += [str(c) for c in inner]
         return cmd
+
+    def _pids_limit(self) -> int:
+        """容器内的进程数上限（Linux 容器专用），可用 ``docker_pids_limit`` 覆盖。"""
+        try:
+            value = int(getattr(self.cfg, "docker_pids_limit", 512) or 512)
+        except Exception:  # noqa: BLE001
+            return 512
+        return max(16, value)
 
     def run(
         self,

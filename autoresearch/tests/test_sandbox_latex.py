@@ -551,14 +551,20 @@ def test_exec_result_and_factory() -> None:
             check(f"to_dict has {key!r}", key in d, str(sorted(d)))
         check("to_dict cmd is a list", isinstance(d["cmd"], list))
 
-    with section("make_sandbox: docker degradation on a docker-less machine"):
-        check(
-            "this machine really has no docker",
-            __import__("shutil").which("docker") is None,
-            "docker unexpectedly found; the degradation assertion is weaker",
-        )
-        logs = Recorder()
-        sb = make_sandbox(Cfg(backend="docker"), _WORK / "docker_deg", logs)
+    with section("make_sandbox: docker 不可用时降级到 subprocess"):
+        # 这里**强制**造出"docker 不可用"，而不是断言本机没有 docker。
+        #
+        # 早期写法是 `check(shutil.which("docker") is None, ...)` —— 把环境事实
+        # 当成了断言。本地没有 docker 所以通过，而 GitHub 的 Windows runner
+        # **装了 Docker**，于是同一份代码在 CI 上必然失败。这与 LaTeX 引擎那个
+        # 问题同构：**测试不该依赖机器恰好缺什么**。
+        _real_probe = DockerSandbox._probe
+        DockerSandbox._probe = lambda self: False  # type: ignore[assignment]
+        try:
+            logs = Recorder()
+            sb = make_sandbox(Cfg(backend="docker"), _WORK / "docker_deg", logs)
+        finally:
+            DockerSandbox._probe = _real_probe  # type: ignore[assignment]
         check("returns SubprocessSandbox", isinstance(sb, SubprocessSandbox), type(sb).__name__)
         check("not a DockerSandbox", not isinstance(sb, DockerSandbox))
         check("sandbox_degrade logged", "sandbox_degrade" in logs.names(), str(logs.names()))
@@ -576,7 +582,11 @@ def test_exec_result_and_factory() -> None:
         check("unknown backend -> SubprocessSandbox", isinstance(sb, SubprocessSandbox))
         check("unknown backend logged as degrade", "sandbox_degrade" in logs.names(), str(logs.names()))
 
-        sb_none = make_sandbox(Cfg(backend="docker"), _WORK / "none_logger", None)
+        # 这一段验的是「logger 为 None 时不崩」，不该顺带依赖 docker 的有无。
+        # 早期用 backend="docker"：本机没 docker 时拿到 SubprocessSandbox 所以通过，
+        # 而 CI 的 Windows runner 有 docker，于是拿到 DockerSandbox、断言失败，
+        # 并进一步触发 docker 后端的真实缺陷。改用显式 subprocess 后端。
+        sb_none = make_sandbox(Cfg(backend="subprocess"), _WORK / "none_logger", None)
         check("event_logger=None is null-safe", isinstance(sb_none, SubprocessSandbox))
         res = sb_none.run_python(code="print('null-safe')\n")
         check("run works with event_logger=None", res.ok and "null-safe" in res.stdout, res.tail(200))
@@ -592,7 +602,15 @@ def test_exec_result_and_factory() -> None:
     with section("DockerSandbox availability"):
         logs = Recorder()
         dk = DockerSandbox(Cfg(backend="docker"), _WORK / "dk", logs)
-        check("available() is False without docker", dk.available() is False)
+    with section("DockerSandbox availability（强制模拟，不依赖本机）"):
+        logs = Recorder()
+        _real_probe2 = DockerSandbox._probe
+        DockerSandbox._probe = lambda self: False  # type: ignore[assignment]
+        try:
+            dk = DockerSandbox(Cfg(backend="docker"), _WORK / "dk", logs)
+            check("_probe=False 时 available() is False", dk.available() is False)
+        finally:
+            DockerSandbox._probe = _real_probe2  # type: ignore[assignment]
         raised = None
         try:
             dk.run(["python", "-c", "print(1)"])
@@ -1064,6 +1082,69 @@ def test_install_tectonic_real_network() -> None:
 # --------------------------------------------------------------------------- #
 # driver
 # --------------------------------------------------------------------------- #
+
+def test_docker_command_construction() -> None:
+    """`DockerSandbox._docker_cmd` 与 `_merged_env` —— 此前**零覆盖**的两处缺陷所在。
+
+    容器后端长期没有被执行过（开发机与 WSL 都没有 Docker），于是两处缺陷一直
+    潜伏到 CI 的 Windows runner 才暴露：
+
+      1. `DockerSandbox.run` 调用 `self._merged_env(env)`，而 `_merged_env` 只
+         定义在 `SubprocessSandbox` 上 -> AttributeError，容器后端一用就崩。
+      2. 无条件传 `--pids-limit`，而 Windows 容器不支持该选项 ->
+         `docker: invalid option: Windows does not support PidsLimit`。
+
+    这两件事**不需要真的跑容器**就能验证，所以这个测试在所有平台都能跑，
+    也就不会再出现"零覆盖"。
+    """
+    section("DockerSandbox: 命令构造与环境合并（无需真实 docker）")
+    logs = Recorder()
+    dk = DockerSandbox(Cfg(backend="docker"), _WORK / "dkcmd", logs)
+
+    # 1) _merged_env 必须可用（缺陷 1 的回归）
+    check("_merged_env 在基类上可用", hasattr(dk, "_merged_env"))
+    merged = dk._merged_env({"MY_VAR": "42", "NONE_VAR": None})
+    check("env 被合并进去", merged.get("MY_VAR") == "42", str(merged.get("MY_VAR")))
+    check("None 值被规范成空串", merged.get("NONE_VAR") == "", repr(merged.get("NONE_VAR")))
+    check(
+        "强制 PYTHONIOENCODING=utf-8（实验脚本输出大量非 ASCII）",
+        merged.get("PYTHONIOENCODING") == "utf-8",
+        repr(merged.get("PYTHONIOENCODING")),
+    )
+    check("保留宿主环境变量", "PATH" in merged or "Path" in merged)
+
+    # 2) 命令构造
+    cmd = dk._docker_cmd(["python", "-c", "print(1)"], allow_network=False)
+    check("以 docker run 开头", cmd[:2] == ["docker", "run"], str(cmd[:2]))
+    check("带 --rm", "--rm" in cmd)
+    check("挂载工作区到 /work", any(str(dk.workdir) in str(c) for c in cmd), str(cmd))
+    check("工作目录是 /work", "-w" in cmd and "/work" in cmd)
+    check("含镜像名", dk.image in cmd, dk.image)
+    check("内层命令在镜像名之后", cmd.index("print(1)") > cmd.index(dk.image))
+    check("allow_network=False 时禁网", "--network" in cmd and "none" in cmd)
+
+    cmd_net = dk._docker_cmd(["python", "-c", "print(1)"], allow_network=True)
+    check("allow_network=True 时不加 --network", "--network" not in cmd_net)
+
+    # 3) --pids-limit 的平台门控（缺陷 2 的回归）
+    if IS_WINDOWS:
+        check(
+            "Windows 上不传 --pids-limit（Windows 容器不支持该选项）",
+            "--pids-limit" not in cmd,
+            str(cmd),
+        )
+    else:
+        check(
+            "POSIX 上仍传 --pids-limit（Linux 容器支持）",
+            "--pids-limit" in cmd,
+            str(cmd),
+        )
+    check("_pids_limit() 有下限保护", dk._pids_limit() >= 16, str(dk._pids_limit()))
+
+    # 4) describe 如实报告后端
+    info = dk.describe()
+    check("describe 报告 backend", info.get("name") == "docker", str(info.get("name")))
+
 def main() -> int:
     print("=" * 72)
     print("autoresearch sandbox + latex offline smoke test")
@@ -1077,6 +1158,7 @@ def main() -> int:
     test_truncation()
     test_timeout_kills_process_tree()
     test_exec_result_and_factory()
+    test_docker_command_construction()
     test_latex_detect_and_logs()
     test_latex_compile_degrades()
     test_explicit_engine_is_honoured()
