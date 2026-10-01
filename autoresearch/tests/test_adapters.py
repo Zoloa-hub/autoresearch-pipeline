@@ -1090,6 +1090,15 @@ def test_real_experiment_adapter_real_script() -> None:
 
     # 用真实脚本目录验证解析确实工作（该目录不在发布仓库里时跳过）
     real_src = Path(r"C:\Users\user\Desktop\Phd-foundations\sakanaai ctm")
+    # 需要 PyTorch 才能通过 validate_environment —— 但 torch 是**可选依赖**，
+    # 裸环境（CI 的 test job 刻意不装任何第三方依赖）里没有它。
+    # 只有关闭 PyTorch 的相关断言，依赖解析与命令构造这两件事与 torch 无关，照测。
+    try:
+        import torch  # noqa: F401
+
+        has_torch = True
+    except ImportError:
+        has_torch = False
     if (real_src / "gov_naive_update.py").is_file():
         real_deps = LorenzGovernanceAdapter({"source_dir": str(real_src)}).local_deps()
         check(len(real_deps) >= 2,
@@ -1101,8 +1110,14 @@ def test_real_experiment_adapter_real_script() -> None:
         real = LorenzGovernanceAdapter(
             {"source_dir": str(real_src), "update_epochs": 1}
         )
-        env_ok, env_why = real.validate_environment()
-        check(env_ok, "真实目录下环境预检通过（含 5 个 checkpoint）", env_why)
+        if has_torch:
+            env_ok, env_why = real.validate_environment()
+            check(env_ok, "真实目录下环境预检通过（含 5 个 checkpoint）", env_why)
+        else:
+            env_ok, env_why = real.validate_environment()
+            check(env_ok is False and "PyTorch" in env_why,
+                  "缺 PyTorch 时 validate_environment 如实报出能力缺口而不是崩溃",
+                  env_why)
         real_argv = real.build_command(
             RunSpec(variant="naive-update", seed=7, out_dir="runs/v/seed_7")
         )

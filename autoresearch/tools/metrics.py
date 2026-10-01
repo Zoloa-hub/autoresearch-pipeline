@@ -947,6 +947,21 @@ def _empty_table(caption: str, label: str) -> str:
     )
 
 
+def _looks_like_dataframe(obj: Any) -> bool:
+    """鸭子类型识别 DataFrame（pandas 缺席时用）。
+
+    判据刻意保守：类名含 ``DataFrame`` 且具备 ``to_dict``/``columns``。
+    单纯有 ``to_dict`` 的普通对象不该被当成 DataFrame——那会把它错误地
+    展开成多行。
+    """
+    if obj is None or isinstance(obj, (list, tuple, Mapping)):
+        return False
+    cls = type(obj)
+    if "DataFrame" not in cls.__name__:
+        return False
+    return hasattr(obj, "to_dict") and hasattr(obj, "columns")
+
+
 def to_latex_table(
     rows: list[dict],
     caption: str = "",
@@ -964,10 +979,27 @@ def to_latex_table(
     * ``bold_best=True`` wraps the best value of each metric in ``\\textbf{}``
       (or ``\\mathbf{}`` inside the ``\\pm`` math cell), using
       :func:`_higher_is_better` unless ``higher_is_better`` overrides it.
-    """
-    import pandas as pd
 
-    if isinstance(rows, pd.DataFrame):
+    **不需要 pandas。** 唯一的 pandas 用法是判断入参是不是 DataFrame；渲染本身
+    完全是纯 Python。早期实现无条件 ``import pandas``，于是缺 pandas 时
+    ``s5_analysis`` 里那个 try/except 会把它吞成一条 warning——
+    **论文主表就这样静默消失了**（实验数据完好，但交付的论文里没有结果表）。
+    pandas 缺席时改为按鸭子类型识别 DataFrame（有 ``to_dict`` 且名字是
+    DataFrame 的对象），其余路径原样工作。
+    """
+    frame_module = None
+    try:
+        import pandas as pd
+
+        frame_module = pd
+    except ImportError:
+        pd = None  # type: ignore[assignment]
+
+    if frame_module is not None and isinstance(rows, frame_module.DataFrame):
+        rows = frame_to_rows(rows)
+    elif frame_module is None and _looks_like_dataframe(rows):
+        # 没有 pandas 也可能收到 DataFrame 对象（调用方装了 pandas）；
+        # 用鸭子类型处理，避免把一整个 DataFrame 当成一个 dict 行。
         rows = frame_to_rows(rows)
     if rows is None:
         rows = []

@@ -40,33 +40,51 @@ jobs:
       - name: Show interpreter
         run: python -VV
 
+      # 冒烟步骤**不阻断**后续套件。
+      #
+      # 第一次真实运行时，Windows 三个版本都死在这一步，于是后面 7 个套件
+      # 全部 skipped —— 我因此丢了 5 个平台 × 6 个套件的信号，恰好是最需要
+      # 日志的时候没有日志。冒烟失败是"表面功能有问题"，不该有阻断权。
+      #
+      # 注意**不要**在这里用 `>> "$GITHUB_ENV"` 之类的 bash 语法：
+      # Windows runner 的默认 shell 是 pwsh，那样写等于自己制造一个新的
+      # 平台相关失败（我第一版就这么写的）。
       - name: Smoke — CLI surface
+        continue-on-error: true
         run: python -m autoresearch.cli stages --json
 
       - name: Suite 1/7 — config + LLM layer
+        if: always()
         run: python -m autoresearch.tests.test_config_llm
 
       - name: Suite 2/7 — retrieval + PDF parsing
+        if: always()
         run: python -m autoresearch.tests.test_retrieve
 
       - name: Suite 3/7 — sandbox + LaTeX
+        if: always()
         run: python -m autoresearch.tests.test_sandbox_latex
 
       - name: Suite 4/7 — figures + metrics
+        if: always()
         run: python -m autoresearch.tests.test_figures_metrics
 
       - name: Suite 5/7 — prompt library + templates
+        if: always()
         run: python -m autoresearch.tests.test_prompts
 
       - name: Suite 6/7 — experiment adapters
+        if: always()
         run: python -m autoresearch.tests.test_adapters
 
       - name: Suite 7/7 — end-to-end pipeline (mock LLM, offline)
+        if: always()
         run: python -m autoresearch.tests.test_pipeline
 
       # 裸环境跑完之后，确认降级路径确实**跳过**了而不是**悄悄通过**。
       # 没有这一步，一个「把绘图断言删掉」的提交也能让上面的 job 全绿。
       - name: Assert optional-dependency skips are reported
+        if: always()
         run: |
           python - <<'PY'
           import re, subprocess, sys
@@ -103,15 +121,23 @@ jobs:
         run: python -m pip install --upgrade ".[figures,pdf,http]"
 
       - name: figures + metrics — full (incl. real plotting)
+        if: always()
         run: python -m autoresearch.tests.test_figures_metrics
 
       - name: retrieval + PDF parsing — full (incl. real PDF via PyMuPDF)
+        if: always()
         run: python -m autoresearch.tests.test_retrieve
 
       - name: end-to-end pipeline with figures enabled
+        if: always()
         run: python -m autoresearch.tests.test_pipeline
 
       - name: Assert nothing was skipped
+        if: always()
+        # 显式声明 bash：这一步用了 heredoc，是 bash 语法。
+        # ubuntu runner 的默认 shell 本来就是 bash，但依赖默认值不如写明——
+        # 默认值一旦变化，失败会以「语法错误」出现，很难归因到真正原因。
+        shell: bash
         run: |
           python - <<'PY'
           import subprocess, sys
@@ -168,6 +194,7 @@ jobs:
         run: python -m compileall -q autoresearch
 
       - name: Import every module
+        if: always()
         run: |
           python - <<'PY'
           import importlib, pathlib, sys
