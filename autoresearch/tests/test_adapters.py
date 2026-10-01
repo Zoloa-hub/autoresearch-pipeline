@@ -43,6 +43,17 @@ def eq(actual, expected, label: str) -> bool:
     return check(actual == expected, label, f"expected {expected!r}, got {actual!r}")
 
 
+def _progress(name: str) -> None:
+    """在每个测试**开始前**打印一行并 flush。
+
+    CI 上这个套件曾以 0.3 秒退出、输出停在某个 section header 上——说明进程
+    在某个测试内部直接死掉（缓冲区随之丢失）。有了这个标记，下次运行至少能
+    定位到是哪一个测试，而不是只看到一个孤零零的 section 标题。
+    ``flush=True`` 是关键：不 flush 的话崩溃时这行也在缓冲区里。
+    """
+    print(f"  ... {name}", flush=True)
+
+
 def _lorenz_source_dir() -> Path | None:
     """真实实验脚本目录（供门控的真实执行测试使用）。
 
@@ -1235,6 +1246,7 @@ def main() -> int:
     print("实验后端适配器测试（离线）")
     print("=" * 70)
 
+    _progress('test_runspec')
     try:
         test_runspec()
     except Exception as _exc:  # noqa: BLE001
@@ -1242,6 +1254,7 @@ def main() -> int:
         _FAILURES.append(f"test_runspec 崩溃: {type(_exc).__name__}: {_exc}")
         _tb.print_exc()
 
+    _progress('test_metric_series_contract')
     try:
         test_metric_series_contract()
     except Exception as _exc:  # noqa: BLE001
@@ -1249,6 +1262,7 @@ def main() -> int:
         _FAILURES.append(f"test_metric_series_contract 崩溃: {type(_exc).__name__}: {_exc}")
         _tb.print_exc()
 
+    _progress('test_standard_metrics_reader')
     try:
         test_standard_metrics_reader()
     except Exception as _exc:  # noqa: BLE001
@@ -1256,6 +1270,7 @@ def main() -> int:
         _FAILURES.append(f"test_standard_metrics_reader 崩溃: {type(_exc).__name__}: {_exc}")
         _tb.print_exc()
 
+    _progress('test_resolve_and_inspect')
     try:
         test_resolve_and_inspect()
     except Exception as _exc:  # noqa: BLE001
@@ -1263,6 +1278,7 @@ def main() -> int:
         _FAILURES.append(f"test_resolve_and_inspect 崩溃: {type(_exc).__name__}: {_exc}")
         _tb.print_exc()
 
+    _progress('test_synthetic_adapter')
     try:
         test_synthetic_adapter()
     except Exception as _exc:  # noqa: BLE001
@@ -1270,6 +1286,7 @@ def main() -> int:
         _FAILURES.append(f"test_synthetic_adapter 崩溃: {type(_exc).__name__}: {_exc}")
         _tb.print_exc()
 
+    _progress('test_script_wrapper_adapter')
     try:
         test_script_wrapper_adapter()
     except Exception as _exc:  # noqa: BLE001
@@ -1277,6 +1294,7 @@ def main() -> int:
         _FAILURES.append(f"test_script_wrapper_adapter 崩溃: {type(_exc).__name__}: {_exc}")
         _tb.print_exc()
 
+    _progress('test_sandbox_run_command')
     try:
         test_sandbox_run_command()
     except Exception as _exc:  # noqa: BLE001
@@ -1284,6 +1302,7 @@ def main() -> int:
         _FAILURES.append(f"test_sandbox_run_command 崩溃: {type(_exc).__name__}: {_exc}")
         _tb.print_exc()
 
+    _progress('test_variant_derivation')
     try:
         test_variant_derivation()
     except Exception as _exc:  # noqa: BLE001
@@ -1291,6 +1310,7 @@ def main() -> int:
         _FAILURES.append(f"test_variant_derivation 崩溃: {type(_exc).__name__}: {_exc}")
         _tb.print_exc()
 
+    _progress('test_comparison_robustness')
     try:
         test_comparison_robustness()
     except Exception as _exc:  # noqa: BLE001
@@ -1298,6 +1318,7 @@ def main() -> int:
         _FAILURES.append(f"test_comparison_robustness 崩溃: {type(_exc).__name__}: {_exc}")
         _tb.print_exc()
 
+    _progress('test_s4_uses_adapter')
     try:
         test_s4_uses_adapter()
     except Exception as _exc:  # noqa: BLE001
@@ -1305,6 +1326,7 @@ def main() -> int:
         _FAILURES.append(f"test_s4_uses_adapter 崩溃: {type(_exc).__name__}: {_exc}")
         _tb.print_exc()
 
+    _progress('test_adapter_informs_codegen')
     try:
         test_adapter_informs_codegen()
     except Exception as _exc:  # noqa: BLE001
@@ -1312,6 +1334,7 @@ def main() -> int:
         _FAILURES.append(f"test_adapter_informs_codegen 崩溃: {type(_exc).__name__}: {_exc}")
         _tb.print_exc()
 
+    _progress('test_variant_budget_respects_adapter_cap')
     try:
         test_variant_budget_respects_adapter_cap()
     except Exception as _exc:  # noqa: BLE001
@@ -1319,6 +1342,7 @@ def main() -> int:
         _FAILURES.append(f"test_variant_budget_respects_adapter_cap 崩溃: {type(_exc).__name__}: {_exc}")
         _tb.print_exc()
 
+    _progress('test_metric_direction_is_unified')
     try:
         test_metric_direction_is_unified()
     except Exception as _exc:  # noqa: BLE001
@@ -1326,6 +1350,7 @@ def main() -> int:
         _FAILURES.append(f"test_metric_direction_is_unified 崩溃: {type(_exc).__name__}: {_exc}")
         _tb.print_exc()
 
+    _progress('test_json_metrics_with_bom')
     try:
         test_json_metrics_with_bom()
     except Exception as _exc:  # noqa: BLE001
@@ -1333,6 +1358,7 @@ def main() -> int:
         _FAILURES.append(f"test_json_metrics_with_bom 崩溃: {type(_exc).__name__}: {_exc}")
         _tb.print_exc()
 
+    _progress('test_no_unfilled_template_placeholders')
     try:
         test_no_unfilled_template_placeholders()
     except Exception as _exc:  # noqa: BLE001
@@ -1340,6 +1366,7 @@ def main() -> int:
         _FAILURES.append(f"test_no_unfilled_template_placeholders 崩溃: {type(_exc).__name__}: {_exc}")
         _tb.print_exc()
 
+    _progress('test_codegen_prompt_defers_to_adapter')
     try:
         test_codegen_prompt_defers_to_adapter()
     except Exception as _exc:  # noqa: BLE001
@@ -1347,6 +1374,7 @@ def main() -> int:
         _FAILURES.append(f"test_codegen_prompt_defers_to_adapter 崩溃: {type(_exc).__name__}: {_exc}")
         _tb.print_exc()
 
+    _progress('test_section_prompt_has_no_phantom_fields')
     try:
         test_section_prompt_has_no_phantom_fields()
     except Exception as _exc:  # noqa: BLE001
@@ -1354,6 +1382,7 @@ def main() -> int:
         _FAILURES.append(f"test_section_prompt_has_no_phantom_fields 崩溃: {type(_exc).__name__}: {_exc}")
         _tb.print_exc()
 
+    _progress('test_keywords_survive_review_loop')
     try:
         test_keywords_survive_review_loop()
     except Exception as _exc:  # noqa: BLE001
@@ -1361,6 +1390,7 @@ def main() -> int:
         _FAILURES.append(f"test_keywords_survive_review_loop 崩溃: {type(_exc).__name__}: {_exc}")
         _tb.print_exc()
 
+    _progress('test_real_experiment_adapter_real_script')
     try:
         test_real_experiment_adapter_real_script()
     except Exception as _exc:  # noqa: BLE001
@@ -1368,6 +1398,7 @@ def main() -> int:
         _FAILURES.append(f"test_real_experiment_adapter_real_script 崩溃: {type(_exc).__name__}: {_exc}")
         _tb.print_exc()
 
+    _progress('test_lorenz_adapter_runs_for_real')
     try:
         test_lorenz_adapter_runs_for_real()
     except Exception as _exc:  # noqa: BLE001

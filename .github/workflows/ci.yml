@@ -193,27 +193,69 @@ jobs:
       - name: Byte-compile every module
         run: python -m compileall -q autoresearch
 
+      # 导入每个模块，验证没有语法/循环导入/名字错误。
+      #
+      # 注意：**不能**要求"裸环境下每个模块都能导入"——那和"零强制依赖"矛盾。
+      # `tools/figures` 在模块级 import matplotlib，`templates/experiment/train`
+      # 在模块级 import numpy，它们**按设计**就需要可选依赖。早期这个步骤把它们
+      # 的 ImportError 当成失败，于是 lint 在裸环境必然变红。
+      #
+      # 现在的判定分两类：
+      #   * 核心模块：必须导入成功；
+      #   * 声明了可选依赖的模块：**要么导入成功，要么报出缺失的那个依赖名**。
+      #     后者仍然有价值——它证明失败原因是"缺可选依赖"而不是代码写坏了。
       - name: Import every module
         if: always()
+        shell: bash
         run: |
           python - <<'PY'
           import importlib, pathlib, sys
+
+          #: 模块 → 它要求的可选依赖（裸环境下允许 ImportError，但必须是这一个）
+          OPTIONAL = {
+              "autoresearch.tools.figures": "matplotlib",
+              "autoresearch.tools.metrics": None,       # 已改为 pandas 可选、核心可用
+              "autoresearch.templates.experiment.train": "numpy",
+              "autoresearch.adapters.lorenz_governance": None,  # torch 只在方法内 import
+          }
+
           root = pathlib.Path("autoresearch")
-          failed = []
+          core_failed: list[str] = []
+          optional_ok: list[str] = []
+          optional_bad: list[str] = []
+          core_count = 0
+
           for path in sorted(root.rglob("*.py")):
               if "__pycache__" in path.parts:
                   continue
               if path.name.startswith("test_") or path.parent.name == "tests":
                   continue
               mod = ".".join(path.with_suffix("").parts)
+              expect_missing = OPTIONAL.get(mod, "__core__")
               try:
                   importlib.import_module(mod)
+              except ImportError as exc:
+                  text = str(exc)
+                  if expect_missing == "__core__":
+                      core_failed.append(f"{mod}: ImportError: {text}")
+                  elif expect_missing and expect_missing in text:
+                      optional_ok.append(f"{mod} (需要 {expect_missing}，如实报告)")
+                  else:
+                      optional_bad.append(f"{mod}: 期望缺 {expect_missing!r}，实际: {text}")
               except Exception as exc:
-                  failed.append(f"{mod}: {type(exc).__name__}: {exc}")
-          if failed:
-              print("\n".join(failed))
+                  core_failed.append(f"{mod}: {type(exc).__name__}: {exc}")
+              else:
+                  if expect_missing == "__core__":
+                      core_count += 1
+
+          for line in optional_ok:
+              print(f"  optional: {line}")
+          problems = core_failed + optional_bad
+          if problems:
+              print("\n".join(problems))
               sys.exit(1)
-          print("all modules import cleanly")
+          print(f"{core_count} core modules import cleanly; "
+                f"{len(optional_ok)} optional-dependency modules degrade correctly")
           PY
 
       - name: No committed secrets
