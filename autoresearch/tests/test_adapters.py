@@ -377,8 +377,18 @@ def test_script_wrapper_adapter() -> None:
     from autoresearch.adapters import RunSpec, resolve_adapter
 
     root = _workspace_root()
-    script = root / "autoresearch" / "templates" / "experiment" / "train.py"
-    if not check(script.is_file(), "存在可用的测试脚本", str(script)):
+    # 夹具用**纯标准库**脚本，而不是 `templates/experiment/train.py`。
+    #
+    # 原因：那个模板在模块级 `import numpy`，而 CI 的 test job 刻意不装任何
+    # 第三方依赖，于是本套件在所有平台都失败：
+    #     File ".../_provided/train.py", line 35
+    #         import numpy as np
+    #     ModuleNotFoundError: No module named 'numpy'
+    # 两者各自都对——模板是给人参考的完整实现，用 numpy 合理；而套件必须在裸环境
+    # 跑，所以夹具不能有第三方依赖。换成一个纯标准库实现，反而多验证了一件更重要的
+    # 事：**零依赖脚本也能被 script-wrapper 正常驱动**。
+    script = root / "autoresearch" / "tests" / "fixtures" / "pure_python_train.py"
+    if not check(script.is_file(), "存在可用的测试脚本（纯标准库夹具）", str(script)):
         return
 
     adapter = resolve_adapter("script-wrapper", {"script": str(script), "epochs": 2})
@@ -394,7 +404,9 @@ def test_script_wrapper_adapter() -> None:
     # entrypoint 是给命令行用的**相对**路径（必须能在工作目录里解析），
     # 因此"文件是否存在"要看 code_files()，而不是直接对 entrypoint 做 is_file()
     # ——后者按当前 cwd 解析，在工作目录不同时会误判。
-    eq(adapter.entrypoint, "_provided/train.py", "entrypoint 是工作区相对路径")
+    entry = adapter.entrypoint
+    check(entry.startswith("_provided/") and entry.endswith(".py"),
+          "entrypoint 是工作区相对路径", entry)
     check("/" in adapter.entrypoint and "\\" not in adapter.entrypoint,
           "entrypoint 用正斜杠（跨平台一致）", adapter.entrypoint)
     files = adapter.code_files(ws)
@@ -412,15 +424,16 @@ def test_script_wrapper_adapter() -> None:
     check("--seed" in cmd and "1" in cmd, "命令含 seed")
     check("runs/method/seed_1" in cmd, "命令含 out_dir")
     # 脚本路径必须是带正斜杠的相对路径（跨平台一致）
-    check("_provided/train.py" in cmd, "脚本路径是工作区内的相对路径", str(cmd))
+    check(entry in cmd, "脚本路径是工作区内的相对路径", str(cmd))
 
     # 真实执行并解析
     import subprocess
 
     run_dir = ws / "runs" / "method" / "seed_1"
     run_dir.mkdir(parents=True, exist_ok=True)
+    # 直接执行时也要用适配器给的 entrypoint，避免夹具改名后这里静默跑错文件
     proc = subprocess.run(
-        [sys.executable, str(ws / "_provided" / "train.py"), "--variant", "method",
+        [sys.executable, str(ws / entry), "--variant", "method",
          "--epochs", "2", "--seed", "1", "--out-dir", str(run_dir)],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180,
         cwd=str(ws),
@@ -444,8 +457,10 @@ def test_script_wrapper_adapter() -> None:
         "args_template": ["{script}", "--variant", "{variant}", "--out-dir", "{out_dir}"],
     })
     custom.prepare(ws, {})
+    # 用适配器给的 entrypoint，而不是写死夹具文件名——换夹具不该让断言碎掉
+    entry_custom = custom.entrypoint
     eq(custom.build_command(spec),
-       ["python", "_provided/train.py", "--variant", "method", "--out-dir",
+       ["python", entry_custom, "--variant", "method", "--out-dir",
         "runs/method/seed_1"],
        "自定义 args_template 生效")
 
