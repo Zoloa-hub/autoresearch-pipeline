@@ -53,33 +53,37 @@ jobs:
         continue-on-error: true
         run: python -m autoresearch.cli stages --json
 
+      # 套件经 tools/dev/ci_suite.py 运行：失败时把**具体失败项**写成
+      # GitHub annotation。公开仓库的 job 日志正文需要 admin 权限才能通过 API
+      # 读，而 annotation 匿名可读——否则 CI 红了之后能看到的只有
+      # "Process completed with exit code 1."，连作者都定位不到问题。
       - name: Suite 1/7 — config + LLM layer
         if: always()
-        run: python -m autoresearch.tests.test_config_llm
+        run: python tools/dev/ci_suite.py test_config_llm
 
       - name: Suite 2/7 — retrieval + PDF parsing
         if: always()
-        run: python -m autoresearch.tests.test_retrieve
+        run: python tools/dev/ci_suite.py test_retrieve
 
       - name: Suite 3/7 — sandbox + LaTeX
         if: always()
-        run: python -m autoresearch.tests.test_sandbox_latex
+        run: python tools/dev/ci_suite.py test_sandbox_latex
 
       - name: Suite 4/7 — figures + metrics
         if: always()
-        run: python -m autoresearch.tests.test_figures_metrics
+        run: python tools/dev/ci_suite.py test_figures_metrics
 
       - name: Suite 5/7 — prompt library + templates
         if: always()
-        run: python -m autoresearch.tests.test_prompts
+        run: python tools/dev/ci_suite.py test_prompts
 
       - name: Suite 6/7 — experiment adapters
         if: always()
-        run: python -m autoresearch.tests.test_adapters
+        run: python tools/dev/ci_suite.py test_adapters
 
       - name: Suite 7/7 — end-to-end pipeline (mock LLM, offline)
         if: always()
-        run: python -m autoresearch.tests.test_pipeline
+        run: python tools/dev/ci_suite.py test_pipeline
 
       # 裸环境跑完之后，确认降级路径确实**跳过**了而不是**悄悄通过**。
       # 没有这一步，一个「把绘图断言删掉」的提交也能让上面的 job 全绿。
@@ -136,15 +140,15 @@ jobs:
 
       - name: figures + metrics — full (incl. real plotting)
         if: always()
-        run: python -m autoresearch.tests.test_figures_metrics
+        run: python tools/dev/ci_suite.py test_figures_metrics
 
       - name: retrieval + PDF parsing — full (incl. real PDF via PyMuPDF)
         if: always()
-        run: python -m autoresearch.tests.test_retrieve
+        run: python tools/dev/ci_suite.py test_retrieve
 
       - name: end-to-end pipeline with figures enabled
         if: always()
-        run: python -m autoresearch.tests.test_pipeline
+        run: python tools/dev/ci_suite.py test_pipeline
 
       - name: Assert nothing was skipped
         if: always()
