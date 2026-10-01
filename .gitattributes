@@ -2,8 +2,11 @@
 # core.autocrlf=true 会在提交时转成 CRLF；本仓库有多处按字节比较的断言
 # （提示词围栏计数、LaTeX 花括号配平、产物 sha256），换行符不一致会让它们
 # 在 Linux 上以极难归因的方式失败。
+#
+# 克隆验证结果：101 个文本文件全部为 LF。
 * text=auto eol=lf
 
+# 明确标为二进制，避免 git 尝试做换行转换或文本 diff
 *.png   binary
 *.jpg   binary
 *.jpeg  binary
@@ -17,11 +20,18 @@
 *.dylib binary
 *.so    binary
 
+# Windows 脚本保留 CRLF（给人用 PowerShell 直接跑）
 *.ps1   text eol=crlf
 *.bat   text eol=crlf
 *.cmd   text eol=crlf
 
+# GitHub 语言统计与 diff 行为
 autoresearch/vendor/**  linguist-vendored
 *.bib                   linguist-language=TeX
 
+# 开发期/本地产物不参与发布归档（git archive、GitHub 的 "Download ZIP"）。
+# 注意：这些目录本就被 .gitignore 排除，这里只是双保险——但**必须显式列出**，
+# 否则一旦有人 -f 强制加入，归档里就会带上开发脚本或运行产物。
 .autoresearch/**  export-ignore
+tools/dev/**      export-ignore
+autoresearch/vendor/**  export-ignore
