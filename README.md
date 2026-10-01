@@ -1,10 +1,19 @@
 # Auto-Research Pipeline
 
+[![CI](https://github.com/Zoloa-hub/autoresearch-pipeline/actions/workflows/ci.yml/badge.svg)](https://github.com/Zoloa-hub/autoresearch-pipeline/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/python-3.10%20%7C%203.12%20%7C%203.13-blue.svg)](pyproject.toml)
+
 把科研全生命周期拆成九个离散、可单独重跑的阶段，用 LLM + 检索增强 + 沙箱执行 + LaTeX
 编译串成一条**可审计、可断点续跑、会诚实报告自己失败位置**的自动科研流水线。
 
 > **不是**「一键生成一篇能中的论文」的工具。它的目标是把科研过程变得可复现、可核查，
 > 并且在做不到的时候如实说出来。
+
+CI 在 ubuntu / windows / macos 三平台 × Python 3.10/3.12/3.13 上全绿，且**核心套件
+不安装任何第三方依赖**——那是"零强制依赖"这条承诺的可执行证据，不是口头声明。
+另有 `extras` job 装上可选依赖再跑一遍，保证绘图与 PDF 解析真的有覆盖
+（跳过不等于测过）。
 
 ```text
 ① 文献检索 ──▶ ② 构思+查新 ──▶ ③ 实验规划 ──▶ ④ 沙箱执行+自纠错
