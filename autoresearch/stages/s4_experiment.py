@@ -1258,7 +1258,7 @@ def _higher_is_better(name: str, directions: dict[str, bool] | None = None) -> b
 
     此前 s3/s4/s5/s9 各有一份 token 表副本，且已经漂移。现在方向判定收敛到
     `tools.metrics` 一张表；而**领域差异**由适配器通过 `metric_directions()`
-    显式声明——通用词表只是兜底，且对非 ML 领域并不可靠（材料学实测 13/19 不可信）。
+    显式声明——通用词表只是兜底，且对非 ML 领域并不可靠（材料学实测 10/18 不可信）。
     """
     from ..tools.metrics import _higher_is_better as _shared
 
