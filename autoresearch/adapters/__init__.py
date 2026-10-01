@@ -36,6 +36,7 @@ from .base import (
     read_standard_metrics,
     resolve_adapter,
 )
+from .comsol_batch import ComsolBatchAdapter
 from .lorenz_governance import LorenzGovernanceAdapter
 from .materials_optics import MaterialsOpticsAdapter
 from .script_wrapper import ScriptWrapperAdapter
@@ -48,6 +49,7 @@ __all__ = [
     "BaseExperimentAdapter",
     "MetricSeries",
     "RunSpec",
+    "ComsolBatchAdapter",
     "LorenzGovernanceAdapter",
     "MaterialsOpticsAdapter",
     "ScriptWrapperAdapter",
