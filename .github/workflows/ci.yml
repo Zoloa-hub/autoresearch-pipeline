@@ -208,6 +208,54 @@ jobs:
 
       # 不引入 ruff/mypy 这类会随版本漂移的门禁；只查"装上就能跑"的硬事实：
       # 语法正确、导入完整、没有把密钥写进仓库。
+      # 自动检查：任何"把非 ASCII 打到 stdout"的入口都必须在窄编码下存活。
+      #
+      # 这个坑踩过两次：一次在包入口（autoresearch/__init__.py 的日志中文化），
+      # 一次在 tools/dev/ci_suite.py（包装器打印套件输出）。第二次让 Windows 上
+      # 多个套件同时"失败"，而真凶是包装器自己崩了、连 annotation 都没输出——
+      # 极难归因。靠人记住"新入口要加固 stdio"不可靠，所以固化成检查。
+      - name: Entry points survive a non-UTF-8 console
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY'
+          import pathlib, subprocess, sys
+
+          #: 强制窄编码跑一遍每个入口，确认不会因非 ASCII 输出而崩
+          CASES = [
+              ("tools/dev/ci_suite.py", ["test_prompts"]),
+          ]
+          NARROW = (
+              "import sys;"
+              "sys.stdout.reconfigure(encoding='cp437', errors='strict');"
+              "sys.stderr.reconfigure(encoding='cp437', errors='strict');"
+          )
+          failed = []
+          for script, argv in CASES:
+              if not pathlib.Path(script).is_file():
+                  continue
+              code = (
+                  NARROW
+                  + f"sys.argv={[script] + argv!r};"
+                  + f"exec(compile(open({script!r}, encoding='utf-8').read(), {script!r}, 'exec'))"
+              )
+              proc = subprocess.run(
+                  [sys.executable, "-c", code],
+                  capture_output=True, text=True, encoding="utf-8", errors="replace",
+              )
+              if "UnicodeEncodeError" in (proc.stderr or ""):
+                  failed.append(f"{script}: 在窄编码下抛 UnicodeEncodeError")
+              elif proc.returncode != 0:
+                  failed.append(f"{script}: rc={proc.returncode}（{proc.stderr[-300:]}）")
+              else:
+                  print(f"  ok {script} 在 cp437 下存活")
+          if failed:
+              for item in failed:
+                  print(f"::error::{item}")
+              sys.exit(1)
+          print("all entry points survive a non-UTF-8 console")
+          PY
+
       - name: Byte-compile every module
         run: python -m compileall -q autoresearch
 

@@ -34,6 +34,42 @@ import os
 import subprocess
 import sys
 
+
+def _harden_stdio() -> None:
+    """让本脚本的标准输出**永不因非 ASCII 而崩**。
+
+    这个包装器会把套件的完整输出（含大量中文标签与 SKIP 说明）打印出来。
+    在非 UTF-8 控制台下（Windows 的 cp1252/cp936、某些 CI 容器的 POSIX locale），
+    `print()` 一个中文串会抛 `UnicodeEncodeError`，**脚本当场死掉**——于是
+    一个本来只是"套件失败"的情况，变成"包装器崩溃、连 annotation 都没输出"，
+    而 CI 上看到的是多个套件同时失败，极难归因到真正的源头。
+
+    这是**同一个坑的第二次**：第一次在 autoresearch/__init__.py 的包入口
+    （那里的日志与报告大量使用中文）。区别是这个脚本在包外面，
+    享受不到包入口的加固，所以必须自带一份。
+
+    `backslashreplace` 而不是 `replace`：保留可读的 ``\u4e2d``，
+    信息量更大，也不会让编码问题掩盖真正的失败。
+    """
+    import sys as _sys
+
+    for stream, errors in ((_sys.stdout, "backslashreplace"), (_sys.stderr, "replace")):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors=errors)
+        except (ValueError, OSError, AttributeError):
+            try:
+                stream.reconfigure(errors=errors)
+            except Exception:  # noqa: BLE001 - 加固本身绝不能成为失败源
+                pass
+
+
+_harden_stdio()
+
+
+
 #: GitHub 每个 step 最多接受 10 条 error annotation
 MAX_ANNOTATIONS = 8
 #: 单条 annotation 的长度上限（GitHub 约 64KB，这里刻意保守）

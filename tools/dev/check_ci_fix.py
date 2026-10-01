@@ -31,7 +31,7 @@ EXPECTED_JOBS = {
     "test": 12,
     "extras": 7,
     "packaging": 5,
-    "lint": 5,
+    "lint": 6,   # 新增「窄编码存活」检查
 }
 actual = {name: len(job.get("steps") or []) for name, job in data["jobs"].items()}
 problems = []
