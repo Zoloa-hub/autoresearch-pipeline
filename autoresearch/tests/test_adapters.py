@@ -20,6 +20,8 @@ import json
 import re
 import shutil
 import sys
+
+from autoresearch.adapters import RunSpec
 from pathlib import Path
 
 _CHECKS = 0
@@ -39,6 +41,40 @@ def check(condition: bool, label: str, detail: str = "") -> bool:
 
 def eq(actual, expected, label: str) -> bool:
     return check(actual == expected, label, f"expected {expected!r}, got {actual!r}")
+
+
+def _lorenz_source_dir() -> Path | None:
+    """真实实验脚本目录（供门控的真实执行测试使用）。
+
+    优先读 ``AUTORESEARCH_LORENZ_SOURCE``；否则试一个已知的本地位置。
+    两者都不存在时返回 ``None``，让调用方**跳过**而不是失败——
+    发布仓库里本来就不该包含用户那份实验脚本。
+    """
+    import os
+
+    env = os.environ.get("AUTORESEARCH_LORENZ_SOURCE")
+    candidates: list[Path] = [Path(env)] if env else []
+    candidates.append(Path(r"C:\Users\user\Desktop\Phd-foundations\sakanaai ctm"))
+    for cand in candidates:
+        if (cand / "gov_naive_update.py").is_file():
+            return cand
+    return None
+
+
+def _lorenz_fixture_dir() -> Path:
+    """真实实验适配器的指标 fixture 目录。
+
+    用 fixture 而不是真跑实验：套件的硬性不变量是「全绿不需要网络/API Key」，
+    而真跑那份脚本还要 PyTorch 与用户目录。解析逻辑本身完全可以用
+    一段**真实的**脚本输出（从真跑中截取）来验证。
+    """
+    return (
+        _workspace_root()
+        / "autoresearch"
+        / "tests"
+        / "fixtures"
+        / "lorenz_governance"
+    )
 
 
 def section(title: str) -> None:
@@ -982,29 +1018,347 @@ def test_keywords_survive_review_loop() -> None:
           "_apply_iteration 把 keywords 传给 _assemble_main")
 
 
+def test_real_experiment_adapter_real_script() -> None:
+    """真实实验适配器：接一份**真实科研脚本**时才暴露的接口摩擦。
+
+    被测对象是 ``adapters/lorenz_governance.py``，它驱动 Kong 的
+    ``gov_naive_update.py``（Lorenz-63 governance 实验，内部跑 5 个模型种子）。
+    合成玩具适配器永远不会暴露下面这些问题：
+
+    1. **脚本内部固定种子、命令行不接受 seed**，而 ``RunSpec.seed`` 是管线必需的。
+       适配器必须忽略它——把 ``--seed`` 传进不认识它的 argparse 会直接退出码 2。
+    2. **本地依赖是传递闭包**。第一版手工列了两个文件，运行时炸在
+       ``validate_faithful_chaos`` → ``validate_lorenz_lyapunov`` 这条传递依赖上。
+    3. **指标要按脚本内部种子拆成多条序列**，否则「种子间差异」会被当成
+       「种子内噪声」；这个实验里 ``d|lam-lr|`` 的种子间极差是 0.38（两个数量级）。
+    4. **缺失值必须丢弃而不是填 0**（pre 侧 ``vpt`` 常为 ``None``）。
+    5. **双模式导入**：作为 ``.py`` 文件独立加载时相对导入会失败，需退回绝对导入。
+
+    这里**不实际执行**脚本（那要 1-2 分钟）；真实执行由下面
+    ``test_lorenz_adapter_runs_for_real`` 在 ``AUTORESEARCH_TEST_SLOW=1`` 时门控。
+    """
+    section("真实实验适配器：Lorenz governance")
+    from autoresearch.adapters import resolve_adapter
+    from autoresearch.adapters.lorenz_governance import (
+        ADAPTER,
+        LorenzGovernanceAdapter,
+    )
+
+    # --- 契约与注册 --------------------------------------------------- #
+    eq(ADAPTER, LorenzGovernanceAdapter, "模块级 ADAPTER 已导出（支持 .py 路径加载）")
+    check(LorenzGovernanceAdapter.owns_code is True,
+          "owns_code=True：跳过 LLM 代码生成，但保留调试闭环与保真度检查")
+    eq(LorenzGovernanceAdapter.max_variants, 1,
+       "臂数压到 1（脚本一次跑完全部种子，再加臂只是重复同样的计算）")
+    _probe = LorenzGovernanceAdapter({})
+    check(_probe.supported_variants() is None,
+          "supported_variants() 返回 None（不做白名单过滤）")
+
+    # 加载路径：module:Class 必须能用
+    loaded = resolve_adapter(
+        "autoresearch.adapters.lorenz_governance:LorenzGovernanceAdapter", {}
+    )
+    eq(loaded.name, "lorenz-governance", "module:Class 加载路径可用")
+
+    root = _workspace_root()
+    adapter = LorenzGovernanceAdapter({"source_dir": str(root), "update_epochs": 1})
+
+    # --- 1) 命令行绝不能含脚本不认识的 --seed -------------------------- #
+    spec = RunSpec(variant="naive-update", seed=7, out_dir="runs/naive-update/seed_7")
+    argv = adapter.build_command(spec)
+    check("--seed" not in argv,
+          "不把脚本不认识的 --seed 传进命令行（否则 argparse 退出码 2）",
+          " ".join(argv))
+    check("--update-epochs" in argv, "传递了脚本真正支持的参数", " ".join(argv))
+    check("--model-dir" in argv and "--data" in argv,
+          "传递了脚本需要的输入目录参数", " ".join(argv))
+    check(any(str(a).endswith("gov_naive_update.py") for a in argv),
+          "入口脚本指向 _provided 下的副本", argv[1])
+    check("runs/naive-update/seed_7" in " ".join(argv),
+          "输出路径跟随 spec.out_dir（含由 spec.seed 决定的目录名）",
+          " ".join(argv))
+
+    # --- 2) 依赖闭包是**自动解析**的（不是手工清单） -------------------- #
+    # 发布仓库里没有用户那份实验脚本，所以这里的闭包应当为空——但不能报错。
+    # 真正要钉住的是「解析由 AST 驱动、缺失文件被安静跳过」这个契约：
+    # 手工清单会漏传递依赖（第一版就漏了 validate_lorenz_lyapunov），
+    # 而自动解析在任何目录下都不会因为单文件缺失而崩。
+    deps = LorenzGovernanceAdapter({"source_dir": str(root)}).local_deps()
+    eq(deps, [], "入口脚本不存在时闭包为空且不抛异常")
+    check(hasattr(LorenzGovernanceAdapter, "local_deps"),
+          "依赖闭包由 local_deps() 自动解析（不是写死的清单）")
+
+    # 用真实脚本目录验证解析确实工作（该目录不在发布仓库里时跳过）
+    real_src = Path(r"C:\Users\user\Desktop\Phd-foundations\sakanaai ctm")
+    if (real_src / "gov_naive_update.py").is_file():
+        real_deps = LorenzGovernanceAdapter({"source_dir": str(real_src)}).local_deps()
+        check(len(real_deps) >= 2,
+              "真实脚本目录下解析出传递依赖闭包", str(real_deps))
+        check("validate_lorenz_lyapunov.py" in real_deps,
+              "**传递**依赖被解析到（手工清单曾漏掉这一个）", str(real_deps))
+        for third in ("torch.py", "numpy.py", "argparse.py", "pathlib.py"):
+            check(third not in real_deps, f"第三方/标准库不进闭包：{third}")
+        real = LorenzGovernanceAdapter(
+            {"source_dir": str(real_src), "update_epochs": 1}
+        )
+        env_ok, env_why = real.validate_environment()
+        check(env_ok, "真实目录下环境预检通过（含 5 个 checkpoint）", env_why)
+        real_argv = real.build_command(
+            RunSpec(variant="naive-update", seed=7, out_dir="runs/v/seed_7")
+        )
+        check("--seed" not in real_argv,
+              "真实脚本的命令行同样不含 --seed（它不接受该参数）",
+              " ".join(real_argv))
+    else:
+        print(f"  SKIP 真实脚本目录不存在: {real_src}")
+
+    # --- 3)(4) 指标解析：按种子拆序列 + 缺失值不填 0 -------------------- #
+    series = adapter.parse_results(_lorenz_fixture_dir())
+    check(bool(series), "fixture 能解析出指标")
+    if series:
+        names = {k.split("@seed=")[0] for k in series}
+        seeds = {k.split("@seed=")[-1] for k in series if "@seed=" in k}
+        check(len(names) >= 4, "解析出多个指标名", str(sorted(names)))
+        check(seeds == {"42", "7", "5555"},
+              "按脚本内部种子拆成多条独立序列（跨种子统计的基础）",
+              str(sorted(seeds)))
+        check(all(isinstance(v, list) and v for v in series.values()),
+              "每条都是非空序列（不是标量）")
+        # pre 侧 vpt 为 null：必须整条缺失，而不是出现一个 0
+        check("source_vpt@seed=42" in series,
+              "post 侧存在的 vpt 被采纳", str(sorted(k for k in series if "vpt" in k)))
+        zeros = [
+            k for k, vs in series.items() if "vpt" in k and any(v == 0.0 for v in vs)
+        ]
+        eq(zeros, [], "缺失的 vpt 没有被充成 0（宁缺勿造）")
+        # 关键：种子间的差异必须**可见**，否则说明被合并成了一条序列
+        gap_keys = sorted(k for k in series if k.startswith("delta_source_lyapunov_gap"))
+        eq(len(gap_keys), 3,
+           "delta_source_lyapunov_gap 保留了 3 个种子各自的取值")
+        gaps = sorted(series[k][0] for k in gap_keys)
+        check(gaps[-1] - gaps[0] > 0.3,
+              "种子间极差被完整保留（这个实验里 d|lam-lr| 相差两个数量级）",
+              str(gaps))
+
+    # --- 5) 双模式导入：作为独立 .py 文件加载 --------------------------- #
+    import importlib.util
+
+    path = root / "autoresearch" / "adapters" / "lorenz_governance.py"
+    if check(path.is_file(), "适配器文件存在", str(path)):
+        spec2 = importlib.util.spec_from_file_location("_probe_lorenz", path)
+        module = importlib.util.module_from_spec(spec2)  # type: ignore[arg-type]
+        try:
+            spec2.loader.exec_module(module)  # type: ignore[union-attr]
+            ok, err = True, ""
+        except Exception as exc:  # noqa: BLE001
+            ok, err = False, f"{type(exc).__name__}: {exc}"
+        check(ok,
+              "能被独立加载（.py 路径加载时相对导入需退回绝对导入）",
+              err)
+
+    # --- 自述必须如实说明接口摩擦 --------------------------------------- #
+    note = LorenzGovernanceAdapter({"source_dir": str(root)}).quality_note()
+    check(any(k in note for k in ("固定 5 个种子", "不接受外部 seed", "重复执行")),
+          "quality_note 如实说明了「内部固定种子 / 会重复执行」这一摩擦",
+          note[:140])
+
+
+def test_lorenz_adapter_runs_for_real() -> None:
+    """可选：真实执行一次（约 1-2 分钟），由 AUTORESEARCH_TEST_SLOW=1 门控。
+
+    默认不跑：套件的硬性不变量是「全绿不需要网络/API Key」，而这条还需要
+    PyTorch 与那个实验脚本。门控而不是删除，是因为「适配器能不能真的驱动
+    这份脚本」只能靠真实执行证明——命令构造正确不等于脚本会成功。
+    """
+    import os
+    import shutil
+
+    import sys as _sys
+
+    section("真实实验适配器：真实执行（门控）")
+    if os.environ.get("AUTORESEARCH_TEST_SLOW") != "1":
+        print("  SKIP 真实执行（设 AUTORESEARCH_TEST_SLOW=1 启用）")
+        return
+
+    from autoresearch.adapters.lorenz_governance import LorenzGovernanceAdapter
+    from autoresearch.config import load_config
+    from autoresearch.tools.sandbox import SubprocessSandbox
+
+    root = _lorenz_source_dir()
+    if root is None:
+        print(
+            "  SKIP 未找到真实实验脚本目录"
+            "（设 AUTORESEARCH_LORENZ_SOURCE=<gov_naive_update.py 所在目录> 启用）"
+        )
+        return
+    adapter = LorenzGovernanceAdapter({"source_dir": str(root), "update_epochs": 1})
+
+    ws = _scratch("lorenz_real")
+    adapter.prepare(ws, {})
+    spec = RunSpec(variant="naive-update", seed=0, out_dir="runs/v/seed_0")
+    run_dir = ws / spec.out_dir
+    run_dir.mkdir(parents=True, exist_ok=True)
+    sandbox = SubprocessSandbox(load_config().sandbox, ws)
+    try:
+        result = sandbox.run_command(adapter.build_command(spec), timeout=900)
+    except Exception as exc:  # noqa: BLE001
+        check("沙箱执行未抛异常", False, f"{type(exc).__name__}: {exc}")
+        return
+    if not check(result.ok, "沙箱执行成功", (result.stderr or "")[-400:]):
+        return
+    series = adapter.parse_results(run_dir)
+    check(bool(series), "真实执行的输出能被解析成指标", str(list(series)[:4]))
+    check(len({k.split("@seed=")[-1] for k in series}) == 5,
+          "解析出全部 5 个脚本内部种子",
+          str(sorted({k.split("@seed=")[-1] for k in series})))
+    _sys.stdout.flush()
+    shutil.rmtree(ws, ignore_errors=True)
+
+
 def main() -> int:
     print("=" * 70)
     print("实验后端适配器测试（离线）")
     print("=" * 70)
 
-    test_runspec()
-    test_metric_series_contract()
-    test_standard_metrics_reader()
-    test_resolve_and_inspect()
-    test_synthetic_adapter()
-    test_script_wrapper_adapter()
-    test_sandbox_run_command()
-    test_variant_derivation()
-    test_comparison_robustness()
-    test_s4_uses_adapter()
-    test_adapter_informs_codegen()
-    test_variant_budget_respects_adapter_cap()
-    test_metric_direction_is_unified()
-    test_json_metrics_with_bom()
-    test_no_unfilled_template_placeholders()
-    test_codegen_prompt_defers_to_adapter()
-    test_section_prompt_has_no_phantom_fields()
-    test_keywords_survive_review_loop()
+    try:
+        test_runspec()
+    except Exception as _exc:  # noqa: BLE001
+        import traceback as _tb
+        _FAILURES.append(f"test_runspec 崩溃: {type(_exc).__name__}: {_exc}")
+        _tb.print_exc()
+
+    try:
+        test_metric_series_contract()
+    except Exception as _exc:  # noqa: BLE001
+        import traceback as _tb
+        _FAILURES.append(f"test_metric_series_contract 崩溃: {type(_exc).__name__}: {_exc}")
+        _tb.print_exc()
+
+    try:
+        test_standard_metrics_reader()
+    except Exception as _exc:  # noqa: BLE001
+        import traceback as _tb
+        _FAILURES.append(f"test_standard_metrics_reader 崩溃: {type(_exc).__name__}: {_exc}")
+        _tb.print_exc()
+
+    try:
+        test_resolve_and_inspect()
+    except Exception as _exc:  # noqa: BLE001
+        import traceback as _tb
+        _FAILURES.append(f"test_resolve_and_inspect 崩溃: {type(_exc).__name__}: {_exc}")
+        _tb.print_exc()
+
+    try:
+        test_synthetic_adapter()
+    except Exception as _exc:  # noqa: BLE001
+        import traceback as _tb
+        _FAILURES.append(f"test_synthetic_adapter 崩溃: {type(_exc).__name__}: {_exc}")
+        _tb.print_exc()
+
+    try:
+        test_script_wrapper_adapter()
+    except Exception as _exc:  # noqa: BLE001
+        import traceback as _tb
+        _FAILURES.append(f"test_script_wrapper_adapter 崩溃: {type(_exc).__name__}: {_exc}")
+        _tb.print_exc()
+
+    try:
+        test_sandbox_run_command()
+    except Exception as _exc:  # noqa: BLE001
+        import traceback as _tb
+        _FAILURES.append(f"test_sandbox_run_command 崩溃: {type(_exc).__name__}: {_exc}")
+        _tb.print_exc()
+
+    try:
+        test_variant_derivation()
+    except Exception as _exc:  # noqa: BLE001
+        import traceback as _tb
+        _FAILURES.append(f"test_variant_derivation 崩溃: {type(_exc).__name__}: {_exc}")
+        _tb.print_exc()
+
+    try:
+        test_comparison_robustness()
+    except Exception as _exc:  # noqa: BLE001
+        import traceback as _tb
+        _FAILURES.append(f"test_comparison_robustness 崩溃: {type(_exc).__name__}: {_exc}")
+        _tb.print_exc()
+
+    try:
+        test_s4_uses_adapter()
+    except Exception as _exc:  # noqa: BLE001
+        import traceback as _tb
+        _FAILURES.append(f"test_s4_uses_adapter 崩溃: {type(_exc).__name__}: {_exc}")
+        _tb.print_exc()
+
+    try:
+        test_adapter_informs_codegen()
+    except Exception as _exc:  # noqa: BLE001
+        import traceback as _tb
+        _FAILURES.append(f"test_adapter_informs_codegen 崩溃: {type(_exc).__name__}: {_exc}")
+        _tb.print_exc()
+
+    try:
+        test_variant_budget_respects_adapter_cap()
+    except Exception as _exc:  # noqa: BLE001
+        import traceback as _tb
+        _FAILURES.append(f"test_variant_budget_respects_adapter_cap 崩溃: {type(_exc).__name__}: {_exc}")
+        _tb.print_exc()
+
+    try:
+        test_metric_direction_is_unified()
+    except Exception as _exc:  # noqa: BLE001
+        import traceback as _tb
+        _FAILURES.append(f"test_metric_direction_is_unified 崩溃: {type(_exc).__name__}: {_exc}")
+        _tb.print_exc()
+
+    try:
+        test_json_metrics_with_bom()
+    except Exception as _exc:  # noqa: BLE001
+        import traceback as _tb
+        _FAILURES.append(f"test_json_metrics_with_bom 崩溃: {type(_exc).__name__}: {_exc}")
+        _tb.print_exc()
+
+    try:
+        test_no_unfilled_template_placeholders()
+    except Exception as _exc:  # noqa: BLE001
+        import traceback as _tb
+        _FAILURES.append(f"test_no_unfilled_template_placeholders 崩溃: {type(_exc).__name__}: {_exc}")
+        _tb.print_exc()
+
+    try:
+        test_codegen_prompt_defers_to_adapter()
+    except Exception as _exc:  # noqa: BLE001
+        import traceback as _tb
+        _FAILURES.append(f"test_codegen_prompt_defers_to_adapter 崩溃: {type(_exc).__name__}: {_exc}")
+        _tb.print_exc()
+
+    try:
+        test_section_prompt_has_no_phantom_fields()
+    except Exception as _exc:  # noqa: BLE001
+        import traceback as _tb
+        _FAILURES.append(f"test_section_prompt_has_no_phantom_fields 崩溃: {type(_exc).__name__}: {_exc}")
+        _tb.print_exc()
+
+    try:
+        test_keywords_survive_review_loop()
+    except Exception as _exc:  # noqa: BLE001
+        import traceback as _tb
+        _FAILURES.append(f"test_keywords_survive_review_loop 崩溃: {type(_exc).__name__}: {_exc}")
+        _tb.print_exc()
+
+    try:
+        test_real_experiment_adapter_real_script()
+    except Exception as _exc:  # noqa: BLE001
+        import traceback as _tb
+        _FAILURES.append(f"test_real_experiment_adapter_real_script 崩溃: {type(_exc).__name__}: {_exc}")
+        _tb.print_exc()
+
+    try:
+        test_lorenz_adapter_runs_for_real()
+    except Exception as _exc:  # noqa: BLE001
+        import traceback as _tb
+        _FAILURES.append(f"test_lorenz_adapter_runs_for_real 崩溃: {type(_exc).__name__}: {_exc}")
+        _tb.print_exc()
 
     print("\n" + "=" * 70)
     if _FAILURES:

@@ -1,0 +1,22 @@
+{
+  "lam_ref": 0.907,
+  "update_epochs": 1,
+  "target_frac": 0.8,
+  "models": {
+    "42": {
+      "pre": {"lam": 0.447, "ss_mse": 0.0206, "vpt": null, "ast_dist": 2.439, "target_ss": 0.0381},
+      "post": {"lam": 0.843, "ss_mse": 0.0102, "vpt": 66, "ast_dist": 2.161, "target_ss": 0.00466},
+      "deltas": {"delta_mse": -0.0104, "delta_vpt": 66, "delta_attractor_dist": -0.278, "delta_abs_lam_ref": -0.396}
+    },
+    "7": {
+      "pre": {"lam": 0.508, "ss_mse": 0.0076, "vpt": null, "ast_dist": 5.075, "target_ss": 0.0194},
+      "post": {"lam": 0.817, "ss_mse": 0.0114, "vpt": 65, "ast_dist": 2.336, "target_ss": 0.00369},
+      "deltas": {"delta_mse": 0.0038, "delta_vpt": 65, "delta_attractor_dist": -2.739, "delta_abs_lam_ref": -0.309}
+    },
+    "5555": {
+      "pre": {"lam": 0.570, "ss_mse": 0.0300, "vpt": null, "ast_dist": 3.000, "target_ss": 0.0270},
+      "post": {"lam": 0.569, "ss_mse": 0.0510, "vpt": 40, "ast_dist": 7.050, "target_ss": 0.0500},
+      "deltas": {"delta_mse": 0.0210, "delta_vpt": 40, "delta_attractor_dist": 4.050, "delta_abs_lam_ref": -0.001}
+    }
+  }
+}
