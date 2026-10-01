@@ -30,8 +30,12 @@ autoresearch/vendor/**  linguist-vendored
 *.bib                   linguist-language=TeX
 
 # 开发期/本地产物不参与发布归档（git archive、GitHub 的 "Download ZIP"）。
-# 注意：这些目录本就被 .gitignore 排除，这里只是双保险——但**必须显式列出**，
+# 这些目录本就被 .gitignore 排除，这里只是双保险——但**必须显式列出**，
 # 否则一旦有人 -f 强制加入，归档里就会带上开发脚本或运行产物。
+#
+# 已知无害现象（已实测）：git archive 仍会写出空的目录条目 `tools/dev/`，
+# 但其中**没有任何文件**。这是 git 的归档行为，三种写法（`tools/dev`、
+# `tools/dev/*`、`tools/dev/**`）都如此；判断是否泄漏要看文件条目而不是目录条目。
 .autoresearch/**  export-ignore
 tools/dev/**      export-ignore
 autoresearch/vendor/**  export-ignore
