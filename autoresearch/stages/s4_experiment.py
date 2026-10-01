@@ -234,7 +234,25 @@ class ExperimentStage(Stage):
                 results[variant] = {}
 
         # --- 3. 汇总 --------------------------------------------------- #
-        comparison = _compare(results)
+        # 适配器声明的指标方向优先于通用 token 表 —— 领域知识在适配器里。
+        # 材料学实测：token 表会把 k（消光系数）判成「越大越好」，而它越小越好。
+        declared = adapter.metric_directions()
+        comparison = _compare(results, directions=declared)
+        if declared:
+            # 声明了方向却没覆盖到的指标会静默回落 token 表 —— 那正是会判反的地方，
+            # 所以如实记一条 warning，让它可见。
+            declared_names = {str(k).split("@seed=")[0] for k in declared}
+            seen_names = {
+                str(k).split("@seed=")[0]
+                for blk in results.values()
+                for k in (blk or {})
+            }
+            uncovered = sorted(seen_names - declared_names)
+            if uncovered:
+                warnings.append(
+                    f"适配器声明了 {len(declared)} 个指标方向，但以下指标未声明、"
+                    f"将回落通用词表（可能判反）: {', '.join(uncovered[:8])}"
+                )
         artifacts.append(
             self.ctx.save_json(
                 "experiment/results.json",
@@ -1012,7 +1030,10 @@ def _validity_check(patch: dict[str, Any] | None, previous_entry: Any) -> str:
     return "；".join(notes)
 
 
-def _compare(results: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _compare(
+    results: dict[str, dict[str, Any]],
+    directions: dict[str, bool] | None = None,
+) -> dict[str, Any]:
     """主对照：baseline vs 最佳非基线变体。
 
     为什么要有回退链：指标名在多种子运行下带 ``@seed=N`` 后缀，直接 ``取交集``
@@ -1042,7 +1063,7 @@ def _compare(results: dict[str, dict[str, Any]]) -> dict[str, Any]:
             if not nums:
                 continue
             metric = _strip_seed(str(key))
-            grouped.setdefault(metric, []).append(_best_of(metric, nums))
+            grouped.setdefault(metric, []).append(_best_of(metric, nums, directions))
         return {m: (sum(vs) / len(vs)) for m, vs in grouped.items() if vs}
 
     baseline_flat = _flatten(baseline_block)
@@ -1059,7 +1080,7 @@ def _compare(results: dict[str, dict[str, Any]]) -> dict[str, Any]:
             b, m = baseline_flat[metric], flat[metric]
             if b:
                 rel = (m - b) / abs(b)
-                rels.append(rel if _higher_is_better(metric) else -rel)
+                rels.append(rel if _higher_is_better(metric, directions) else -rel)
         if rels:
             candidates.append((sum(rels) / len(rels), variant, flat))
 
@@ -1084,7 +1105,7 @@ def _compare(results: dict[str, dict[str, Any]]) -> dict[str, Any]:
         b, m = baseline_flat[name], treatment_flat[name]
         delta = m - b
         rel = (delta / abs(b)) if b else 0.0
-        direction = "higher" if _higher_is_better(name) else "lower"
+        direction = "higher" if _higher_is_better(name, directions) else "lower"
         per_metric[name] = {
             "baseline_best": round(b, 6),
             "method_best": round(m, 6),
@@ -1119,20 +1140,27 @@ def _compare(results: dict[str, dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _best_of(name: str, values: list[float]) -> float:
-    return min(values) if not _higher_is_better(name) else max(values)
+def _best_of(
+    name: str, values: list[float], directions: dict[str, bool] | None = None
+) -> float:
+    """取"最好"的那个值：方向由适配器声明优先决定。
+
+    模块级函数（不是 `_compare` 的闭包），所以 `directions` 必须显式传入——
+    否则会落进"模块级函数里引用外层局部变量"的 NameError。
+    """
+    return min(values) if not _higher_is_better(name, directions) else max(values)
 
 
-def _higher_is_better(name: str) -> bool:
-    """指标方向：转调共享实现（tools.metrics 是唯一规范表）。
+def _higher_is_better(name: str, directions: dict[str, bool] | None = None) -> bool:
+    """指标方向：适配器声明优先，其次共享 token 表。
 
-    此前 s3/s4/s5/s9 各有一份 token 表副本，且已经漂移（有的含 fid/fdr，
-    有的含 flops/params）。副本一旦存在就会继续分叉，而方向判错不会报错——
-    它只会让「改善」的定义在不同章节里不一致。
+    此前 s3/s4/s5/s9 各有一份 token 表副本，且已经漂移。现在方向判定收敛到
+    `tools.metrics` 一张表；而**领域差异**由适配器通过 `metric_directions()`
+    显式声明——通用词表只是兜底，且对非 ML 领域并不可靠（材料学实测 13/19 不可信）。
     """
     from ..tools.metrics import _higher_is_better as _shared
 
-    return bool(_shared(name))
+    return bool(_shared(name, declared=directions))
 
 def _format_plan_block(plan: dict[str, Any]) -> str:
     lines = [

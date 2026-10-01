@@ -194,7 +194,11 @@ def _normalize_metric_name(name: str) -> str:
     return key
 
 
-def _higher_is_better(name: str, overrides: Mapping[str, bool] | None = None) -> bool:
+def _higher_is_better(
+    name: str,
+    overrides: Mapping[str, bool] | None = None,
+    declared: Mapping[str, bool] | None = None,
+) -> bool:
     """Return ``True`` when a larger value of *name* is better.
 
     Resolution order:
@@ -204,6 +208,15 @@ def _higher_is_better(name: str, overrides: Mapping[str, bool] | None = None) ->
       4. substring fallback for tokens of >= 4 characters;
       5. default ``True`` (unknown metrics are assumed higher-is-better).
     """
+    # 1) 适配器声明的方向（领域知识）最优先
+    if declared is not None:
+        dkey = _normalize_metric_name(name)
+        if dkey in declared:
+            return bool(declared[dkey])
+        for k, v in declared.items():
+            if _normalize_metric_name(k) == dkey:
+                return bool(v)
+
     key = _normalize_metric_name(name)
     if overrides:
         for cand, flag in overrides.items():

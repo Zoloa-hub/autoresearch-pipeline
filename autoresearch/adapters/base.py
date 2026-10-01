@@ -363,6 +363,36 @@ class BaseExperimentAdapter(ABC):
         )
 
     # -- 供 s4 构造代码生成提示词 --------------------------------------- #
+    def metric_directions(self) -> dict[str, bool] | None:
+        """声明本适配器产出的指标方向：``{指标名: 越大越好?}``。
+
+        **领域知识属于适配器，不属于管线。** 管线里的通用词表是 ML 中心的
+        （loss/accuracy/f1/bleu…），在别的领域会判错——材料学实测：
+
+            k（消光系数）被判成"越大越好"，而它实际越小越好（越小越透明）
+            alpha、resistivity、corrosion_rate、sintering_temp 同样判反
+            n、band_gap、thermal_conductivity 等**没有固有方向**，却被静默选了一个
+
+        方向判错**不会报错**：它只会让「改善」的定义反过来，进而在论文里
+        把变差写成变好。所以真实适配器应当**显式声明**，哪怕只是声明"无方向"
+        （把它从比较里排除）。
+
+        返回 ``None`` 表示"本适配器不声明，交给通用启发式"（默认）。
+        返回 ``{}`` 表示"已声明但一个都不需要方向判断"——这两者语义不同：
+        前者会走 token 表兜底并留下一条 warning，后者不会。
+        """
+        return None
+
+    def metric_axis(self) -> str | None:
+        """指标序列的物理轴名（若存在）。
+
+        默认 ``None``：管线不假设序列有物理含义。ML 里它是 ``epoch``，
+        材料光谱里可能是 ``wavelength_nm``，但**也可能根本没有轴**
+        ——例如重复测量（那是 replicates，方向轴没有意义）。
+        声明它只影响产物标签与可读性，不改变统计口径。
+        """
+        return None
+
     def codegen_conventions(self) -> str:
         """告诉代码生成模型「本适配器期望什么样的脚本」。
 

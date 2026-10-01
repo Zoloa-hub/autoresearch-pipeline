@@ -37,6 +37,7 @@ from .base import (
     resolve_adapter,
 )
 from .lorenz_governance import LorenzGovernanceAdapter
+from .materials_optics import MaterialsOpticsAdapter
 from .script_wrapper import ScriptWrapperAdapter
 from .synthetic_toy import SyntheticToyAdapter
 
@@ -48,6 +49,7 @@ __all__ = [
     "MetricSeries",
     "RunSpec",
     "LorenzGovernanceAdapter",
+    "MaterialsOpticsAdapter",
     "ScriptWrapperAdapter",
     "SyntheticToyAdapter",
     "builtin_adapters",
