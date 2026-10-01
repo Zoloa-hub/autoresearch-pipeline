@@ -21,6 +21,33 @@ import yaml  # noqa: E402
 
 data = yaml.safe_load(text)
 print("YAML 解析: OK")
+
+# ---------------------------------------------------------------- 结构性断言 --
+# 一次真实的教训：我用脚本做"块替换"时，把 `extras:` 的 job 头一起吞掉了，
+# 它的步骤被并进 test job。YAML 仍然合法、校验也仍然"通过"——
+# 而**绘图与 PDF 解析的真实覆盖被静默删除了**。
+# 所以这里硬性断言 job 集合与每个 job 的规模，任何结构变化都必须显式更新。
+EXPECTED_JOBS = {
+    "test": 12,
+    "extras": 7,
+    "packaging": 5,
+    "lint": 5,
+}
+actual = {name: len(job.get("steps") or []) for name, job in data["jobs"].items()}
+problems = []
+if list(data["jobs"]) != list(EXPECTED_JOBS):
+    problems.append(f"job 集合变了: {list(data['jobs'])} != {list(EXPECTED_JOBS)}")
+for name, want in EXPECTED_JOBS.items():
+    got = actual.get(name)
+    if got != want:
+        problems.append(f"{name}: {got} steps（期望 {want}）")
+if problems:
+    print("  ** 结构断言失败 **")
+    for p in problems:
+        print("   ", p)
+    raise SystemExit(1)
+print("  结构断言: 4 个 job、步骤数与预期一致")
+
 print(f"jobs: {list(data['jobs'])}")
 print()
 for job_name, job in data["jobs"].items():

@@ -85,17 +85,31 @@ jobs:
       # 没有这一步，一个「把绘图断言删掉」的提交也能让上面的 job 全绿。
       - name: Assert optional-dependency skips are reported
         if: always()
+        shell: bash
+        # 这一步必须**自己保证**没有第三方依赖，而不是依赖 job 的隐含状态。
+        # 早期版本在混合条件下运行，于是 Linux 上恰好成立、macOS/Windows 上
+        # 不成立——"跳过上报"本来就是裸环境专有的性质。
+        # 用 sitecustomize 把 site-packages 从 sys.path 里摘掉，
+        # 并且用 PYTHONPATH 注入，使**子进程**（沙箱里的实验脚本）同样被隔离。
         run: |
-          python - <<'PY'
-          import re, subprocess, sys
-          out = subprocess.run(
-              [sys.executable, "-m", "autoresearch.tests.test_figures_metrics"],
-              capture_output=True, text=True, encoding="utf-8", errors="replace",
-          ).stdout
-          assert "SKIPPED" in out, "裸环境下应当明确报告跳过，而不是静默通过"
-          assert re.search(r"PASSED \d+ checks", out), "测试仍应实际执行并给出计数"
-          print("skip reporting ok")
+          GUARD="$PWD/.autoresearch/_bare_guard"
+          mkdir -p "$GUARD"
+          cat > "$GUARD/sitecustomize.py" <<'PY'
+          import sys
+          sys.path = [p for p in sys.path
+                      if "site-packages" not in p and "dist-packages" not in p]
           PY
+          OUT=$(PYTHONPATH="$GUARD:$PWD" python -c "import runpy,sys; sys.argv=['autoresearch.tests.test_figures_metrics']; runpy.run_module('autoresearch.tests.test_figures_metrics', run_name='__main__')" 2>&1)
+          echo "$OUT" | tail -20
+          echo "$OUT" | grep -q "SKIPPED" || {
+            echo "::error::裸环境下应当明确报告跳过，而不是静默通过"
+            exit 1
+          }
+          echo "$OUT" | grep -qE "PASSED [0-9]+ checks" || {
+            echo "::error::测试仍应实际执行并给出计数"
+            exit 1
+          }
+          echo "skip reporting ok"
 
   # 第二个 job：装上可选依赖再跑一遍受影响的套件。
   #
@@ -259,14 +273,33 @@ jobs:
           PY
 
       - name: No committed secrets
+        shell: bash
         run: |
-          # .env 必须被 gitignore 挡住；仓库里出现 sk- 开头的密钥即 CI 失败。
+          # .env 必须被 gitignore 挡住。
           if git ls-files --error-unmatch .env >/dev/null 2>&1; then
             echo "::error::.env is tracked by git — secrets must never be committed"
             exit 1
           fi
-          if git grep -nIE '(sk-[A-Za-z0-9]{16,}|DEEPSEEK_API_KEY=[^[:space:]]|OPENAI_API_KEY=sk-)' -- . ':!*.md' ':!*.example' ':!.env.example'; then
-            echo "::error::possible committed API key"
+
+          # 扫"像真密钥"的字符串。
+          #
+          # 两条经验都来自真实误报：
+          #  1. **必须有长度约束**。早期用 `DEEPSEEK_API_KEY=[^[:space:]]`，
+          #     于是文档里的占位符 `DEEPSEEK_API_KEY=sk-...` 直接命中——
+          #     等于没有判据，只会在自己的文档上反复变红。
+          #  2. **排除要能跨目录**。`:!*.md` 这类 pathspec 通配不跨目录
+          #     （`git ls-files '*.md'` 只列根目录），所以
+          #     `autoresearch/README.md` 从未被排除过。
+          #
+          # 真密钥形态：`sk-` + 至少 20 个字母数字（OpenAI/DeepSeek 都远长于此）。
+          # 占位符形态（`sk-...`、`sk-xxx`、`sk-在此填入你的密钥`）都不会命中。
+          PATTERN='(^|[^A-Za-z0-9_-])sk-[A-Za-z0-9_-]{20,}'
+          if git grep -nIE "$PATTERN" -- . \
+               ':(exclude,glob)**/*.md' \
+               ':(exclude,glob)**/*.example' \
+               ':(exclude,glob)**/*.rst' \
+               ':(exclude).env.example'; then
+            echo "::error::possible committed API key (a real-looking sk- token)"
             exit 1
           fi
           echo "no committed secrets found"
