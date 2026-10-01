@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: 先读已知限制
-    url: https://github.com/OWNER/autoresearch-pipeline/blob/main/CHANGELOG.md
+    url: https://github.com/Zoloa-hub/autoresearch-pipeline/blob/main/CHANGELOG.md
     about: CHANGELOG 顶部列出了已知未验证的路径（CI 运行时语义、POSIX 分支、PDF 编译闭环），请先确认你的问题不在其中。

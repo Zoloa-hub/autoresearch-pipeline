@@ -196,5 +196,5 @@ python -m autoresearch.tests.test_pipeline         # 端到端：mock+offline �
 > `PASSED n checks`，具体数字随代码演进变化；写在 issue 或博客里的历史数字会过期
 > 并误导。而且装了可选依赖与没装时数字**本就不同**（跳过的检查不计入）。
 
-[Unreleased]: https://github.com/OWNER/autoresearch-pipeline/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/OWNER/autoresearch-pipeline/releases/tag/v0.1.0
+[Unreleased]: https://github.com/Zoloa-hub/autoresearch-pipeline/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Zoloa-hub/autoresearch-pipeline/releases/tag/v0.1.0

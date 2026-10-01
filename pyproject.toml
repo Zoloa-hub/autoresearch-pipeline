@@ -56,9 +56,11 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/example/autoresearch-pipeline"
-Documentation = "https://github.com/example/autoresearch-pipeline/blob/main/autoresearch/README.md"
-Issues = "https://github.com/example/autoresearch-pipeline/issues"
+Homepage = "https://github.com/Zoloa-hub/autoresearch-pipeline"
+Documentation = "https://github.com/Zoloa-hub/autoresearch-pipeline/blob/main/autoresearch/README.md"
+Repository = "https://github.com/Zoloa-hub/autoresearch-pipeline"
+Issues = "https://github.com/Zoloa-hub/autoresearch-pipeline/issues"
+Changelog = "https://github.com/Zoloa-hub/autoresearch-pipeline/blob/main/CHANGELOG.md"
 
 [project.scripts]
 autoresearch = "autoresearch.cli:main"
@@ -67,6 +69,10 @@ autoresearch = "autoresearch.cli:main"
 #   [project.entry-points."autoresearch.adapters"]
 #   my-sim = "my_package.adapters:MySimAdapter"
 [project.entry-points."autoresearch.adapters"]
+# 内置适配器（synthetic-toy / script-wrapper / lorenz-governance）由 resolve_adapter
+# 直接识别，不需要在这里注册；本节用于发现**第三方**适配器包。
+# 例：
+#   my-sim = "my_package.adapters:MySimAdapter"
 
 [tool.setuptools]
 packages = [
@@ -79,7 +85,7 @@ packages = [
 ]
 
 [tool.setuptools.package-data]
-autoresearch = [
+"autoresearch" = [
     "prompts/*.md",
     "templates/paper/*.tex",
     "templates/paper/*.bib",
