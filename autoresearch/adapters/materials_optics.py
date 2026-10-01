@@ -48,6 +48,8 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from .sweep import SweepAxis
+
 try:
     from .base import BaseExperimentAdapter, MetricSeries, RunSpec, coerce_metric_series
 except ImportError:  # pragma: no cover - 支持用 .py 路径独立加载
@@ -70,11 +72,23 @@ DIRECTIONS: dict[str, bool] = {
     "transparent_window_nm": True,  # 透明窗口 -> 越大越好
 }
 
+#: 默认扫描轴 —— 深紫外吸收边的三个物理参数。
+#:
+#: ``target`` 是**实测出来的**，不是猜的：``ltp_optics.py`` 把 ``OSC_F/OSC_E0/OSC_G``
+#: 绑成 ``eps_lorentz`` 的默认参数，直接 ``setattr`` 模块常量**不会生效**
+#: （实测确认），必须重建该函数。而 ``N_VIS`` 在 ``nk_table`` 函数体内被读取，
+#: 直接 setattr 即可。
+DEFAULT_SWEEP_AXES = (
+    SweepAxis("osc_g", (0.35, 0.55, 0.75), "eV", target="eps_lorentz:g"),
+    SweepAxis("osc_f", (3.30, 4.10, 4.90), "eV^2", target="eps_lorentz:f"),
+    SweepAxis("n_vis", (2.10, 2.20, 2.30), "", target="N_VIS"),
+)
+
 #: 计算这些指标需要材料模块提供什么
 REQUIRED_API = ("nk_table",)
 
 #: 驱动脚本模板。Adapter 提供模板（seed_code），LLM 在跑不通时可以修补。
-RUNNER_TEMPLATE = '''#!/usr/bin/env python3
+RUNNER_TEMPLATE = r'''#!/usr/bin/env python3
 """驱动材料光学模块并算出指标 —— 由 materials-optics 适配器生成。
 
 **不要改这里的物理模型**：参数与公式来自目标模块本身，本脚本只负责
@@ -159,6 +173,47 @@ def compute_metrics(mod, target_frac: float, jitter: float, seed: int):
     }
 
 
+def apply_override(mod, target: str, value) -> str:
+    """按 target 把参数写进被驱动模块，返回实际应用方式的说明。
+
+    ``target`` 两种形态：
+
+    * ``"N_VIS"``          —— 普通模块属性，直接 ``setattr``
+    * ``"eps_lorentz:g"``  —— 该参数是函数 ``eps_lorentz`` 的**默认参数**。
+      这种绑定在函数定义时就固定了，``setattr`` 模块常量**没有效果**
+      （在真实模块上实测确认），必须重建函数再替换回模块。
+
+    重建用 ``sig.bind_partial`` 而不是简单的 ``kwargs.setdefault``：
+    后者在调用方**按位置**传了该参数时会被忽略，于是覆盖静默失效。
+    """
+    import functools
+    import inspect
+
+    if ":" not in target:
+        if not hasattr(mod, target):
+            raise SystemExit(f"OVERRIDE_TARGET_MISSING: 模块没有属性 {target!r}")
+        setattr(mod, target, value)
+        return f"setattr({target})"
+
+    fname, pname = target.split(":", 1)
+    fn = getattr(mod, fname, None)
+    if fn is None or not callable(fn):
+        raise SystemExit(f"OVERRIDE_TARGET_MISSING: 模块没有可调用对象 {fname!r}")
+    sig = inspect.signature(fn)
+    if pname not in sig.parameters:
+        raise SystemExit(f"OVERRIDE_TARGET_MISSING: {fname}() 没有参数 {pname!r}")
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        bound = sig.bind_partial(*args, **kwargs)
+        bound.arguments[pname] = value
+        bound.apply_defaults()
+        return fn(*bound.args, **bound.kwargs)
+
+    setattr(mod, fname, wrapper)
+    return f"rebind({fname}:{pname})"
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="materials optics metric runner")
     ap.add_argument("--module", required=True, help="材料光学模块的 .py 路径")
@@ -167,12 +222,53 @@ def main(argv=None) -> int:
     ap.add_argument("--jitter", type=float, default=0.004,
                     help="制备/测量扰动幅度（相对）")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--set", dest="sets", action="append", default=[],
+                    metavar="TARGET=VALUE",
+                    help="覆盖被驱动模块的参数，如 N_VIS=2.3 或 eps_lorentz:g=0.35")
     ap.add_argument("--out-dir", required=True)
     args, _unknown = ap.parse_known_args(argv)
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     mod = load_module(Path(args.module))
+
+    # --- 覆盖参数，并**验证真的生效** -------------------------------- #
+    # 覆盖失效是静默的：所有格点算出同一组数值 -> 效应全为 0 ->
+    # 结论变成「这些参数都不重要」。这是一份看起来完全正常的错误结论，
+    # 所以这里主动检测并报错，而不是交出去。
+    baseline_probe = None
+    applied: list[str] = []
+    if args.sets:
+        # 覆盖前的参考值（用同一套判据，避免模块自带随机性造成假阳性）
+        base_mod_probe = compute_metrics(mod, 0.8, args.jitter, args.seed * 1000)
+        for item in args.sets:
+            if "=" not in item:
+                raise SystemExit(f"OVERRIDE_BAD_SYNTAX: 需要 TARGET=VALUE，得到 {item!r}")
+            target, raw_value = item.split("=", 1)
+            try:
+                value: object = float(raw_value)
+            except ValueError:
+                value = raw_value
+            how = apply_override(mod, target.strip(), value)
+            applied.append(f"{target.strip()}={raw_value}({how})")
+        after = compute_metrics(mod, 0.8, args.jitter, args.seed * 1000)
+        same = all(
+            abs(after[k] - base_mod_probe[k]) <= 1e-12 * max(1.0, abs(base_mod_probe[k]))
+            for k in base_mod_probe
+        )
+        if same:
+            sys.stderr.write(
+                "OVERRIDE_NO_EFFECT: 参数覆盖没有改变任何指标 —— 说明覆盖方式与被驱动"
+                "模块的绑定方式不匹配。\n"
+                f"  已尝试: {applied}\n"
+                "  常见原因: 该参数是函数默认值（定义时已绑定），必须写成 "
+                "TARGET='函数名:参数名'。\n"
+                "  继续跑下去会得到一条平坦的效应曲线，并被误读成"
+                "「这些参数都不重要」，因此这里直接失败。\n"
+            )
+            return 3
+        baseline_probe = base_mod_probe
+        print(f"overrides applied: {'; '.join(applied)}", flush=True)
 
     rows = []
     for rep in range(args.replicates):
@@ -260,7 +356,7 @@ class MaterialsOpticsAdapter(BaseExperimentAdapter):
         return [p for p in (workspace / self.entrypoint,) if p.is_file()]
 
     def build_command(self, spec: RunSpec) -> list[str]:
-        return [
+        argv = [
             "python",
             self.entrypoint,
             "--module",
@@ -275,8 +371,15 @@ class MaterialsOpticsAdapter(BaseExperimentAdapter):
             str(spec.seed),
             "--out-dir",
             spec.out_dir,
-            *[str(a) for a in spec.extra_args],
         ]
+        # 把扫描格点的参数交给 runner。**用适配器声明的 target**，
+        # 而不是假设「参数名就是模块属性名」——见 DEFAULT_SWEEP_AXES 的说明：
+        # OSC_* 是函数默认参数（定义时已绑定），按属性名覆盖会静默失效。
+        for axis in (self.sweep_axes() or ()):
+            if axis.name in (spec.params or {}):
+                argv += ["--set", f"{axis.target or axis.name}={spec.params[axis.name]}"]
+        argv.extend(str(a) for a in spec.extra_args)
+        return argv
 
     def parse_results(self, out_dir: Path) -> MetricSeries:
         """每个指标一条序列，序列轴是**重复测量**（见模块 docstring）。
@@ -306,6 +409,32 @@ class MaterialsOpticsAdapter(BaseExperimentAdapter):
                     continue
                 series.setdefault(str(key), []).append(num)
         return coerce_metric_series(series)
+
+    # -- 参数扫描 ------------------------------------------------------- #
+    #: 一次扫描最多跑多少格点（可由 AUTORESEARCH_MAX_SWEEP_RUNS 与配置收紧）
+    max_sweep_runs = 12
+    #: 默认 OFAT —— 3 条轴各 3 水平 => 1+2+2+2 = 7 组。
+    #: 改 "grid" 是 27 组（3³），能测交互效应但要确认预算。
+    default_sweep_mode = "ofat"
+
+    def sweep_axes(self) -> tuple[SweepAxis, ...] | None:
+        """默认扫描深紫外吸收边的三条参数轴。
+
+        可用 ``adapter-arg sweeps=osc_g:0.3|0.5|0.7;n_vis:2.1|2.3`` 覆盖，
+        或 ``sweep_mode=grid`` 切换设计。
+        """
+        raw = self.params.get("sweeps")
+        if raw:
+            parsed = _parse_sweep_spec(str(raw))
+            if parsed:
+                return parsed
+        if self.params.get("no_sweep"):
+            return None
+        return DEFAULT_SWEEP_AXES
+
+    def sweep_mode(self) -> str:
+        mode = str(self.params.get("sweep_mode") or self.default_sweep_mode)
+        return mode if mode in ("ofat", "grid") else self.default_sweep_mode
 
     # -- 领域知识：方向与轴 ---------------------------------------------- #
     def metric_directions(self) -> dict[str, bool] | None:
@@ -348,3 +477,43 @@ class MaterialsOpticsAdapter(BaseExperimentAdapter):
 
 #: 支持用 `--experiment-adapter path/to/materials_optics.py` 直接加载
 ADAPTER = MaterialsOpticsAdapter
+
+
+def _parse_sweep_spec(raw: str) -> tuple[SweepAxis, ...]:
+    """解析 ``"osc_g:0.3|0.5|0.7;n_vis:2.1|2.3"`` 形式的扫描规格。
+
+    已知轴名会继承其 ``unit`` 与 ``target``（覆盖机制），未知轴名则按
+    ``target=同名属性`` 处理——后者对"参数是函数默认值"的模块会静默失效，
+    所以 runner 侧还有一道生效验证兜底。
+    """
+    axes: list[SweepAxis] = []
+    known = {a.name: a for a in DEFAULT_SWEEP_AXES}
+    for chunk in raw.split(";"):
+        chunk = chunk.strip()
+        if not chunk or ":" not in chunk:
+            continue
+        name, values_raw = chunk.split(":", 1)
+        name = name.strip()
+        values: list[Any] = []
+        for token in values_raw.split("|"):
+            token = token.strip()
+            if not token:
+                continue
+            try:
+                values.append(
+                    float(token) if ("." in token or "e" in token.lower()) else int(token)
+                )
+            except ValueError:
+                values.append(token)
+        if len(values) < 2:
+            continue
+        src = known.get(name)
+        axes.append(
+            SweepAxis(
+                name,
+                tuple(values),
+                src.unit if src else "",
+                target=src.target if src else name,
+            )
+        )
+    return tuple(axes)

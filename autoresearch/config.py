@@ -120,6 +120,11 @@ class AutoResearchConfig:
     #: ``min(这里的值, 适配器自己的 max_variants)``——代价高的后端可自行收紧，
     #: 但不可能把这个上限抬高到配置之上。
     max_variants: int = 6
+    #: 单次参数扫描的运行数上限。**与 max_variants 分开**：
+    #: 变体预算默认 2（baseline/method），而一次材料参数扫描
+    #: 天然要 6-18 组；共用一个旋钮会让"想跑扫描"变成
+    #: "必须先把变体上限调大"，语义混淆。
+    max_sweep_runs: int = 24
     llm: LLMConfig = field(default_factory=LLMConfig)
     sandbox: SandboxConfig = field(default_factory=SandboxConfig)
     retrieve: RetrieveConfig = field(default_factory=RetrieveConfig)
@@ -422,6 +427,9 @@ ENV_KEYS: dict[str, tuple[str, ...]] = {
     "MAILTO": ("retrieve", "mailto"),
     "EXPERIMENT_ADAPTER": ("experiment_adapter",),
     "MAX_VARIANTS": ("max_variants",),
+    #: 参数扫描的运行数预算。**与 MAX_VARIANTS 分开**：前者是"跑几个对照臂"，
+    #: 后者是"扫多少个参数格点"，两者的合理量级不同（2-6 vs 6-60）。
+    "MAX_SWEEP_RUNS": ("max_sweep_runs",),
 }
 
 _PROVIDER_DEFAULTS: dict[str, dict[str, Any]] = {

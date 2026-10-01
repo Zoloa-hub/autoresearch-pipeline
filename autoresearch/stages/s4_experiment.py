@@ -182,7 +182,16 @@ class ExperimentStage(Stage):
         metrics_dir = self.ctx.path("metrics")
         metrics_dir.mkdir(parents=True, exist_ok=True)
 
-        variants = _plan_variants(plan, max_variants=_variant_budget(self.ctx.cfg, adapter))
+        # 扫描预算与变体预算分开：前者是"扫多少格点"，后者是"跑几个对照臂"。
+        # 显式传参，不用 setattr 往适配器上挂临时属性（那会让同一适配器实例的
+        # 行为依赖调用顺序）。
+        sweep_budget = _sweep_budget(self.ctx.cfg, adapter)
+        variants = _plan_variants(
+            plan,
+            max_variants=_variant_budget(self.ctx.cfg, adapter),
+            adapter=adapter,
+            sweep_budget=sweep_budget,
+        )
         # 过滤掉适配器明确说不支持的变体。理由见 BaseExperimentAdapter.supported_variants
         # ——让它们在 argparse 上撞 6 次墙，既浪费墙上时间，又把真实原因埋掉。
         supported = adapter.supported_variants()
@@ -460,7 +469,10 @@ class ExperimentStage(Stage):
         run_records: list[dict[str, Any]] = []
         metrics: dict[str, Any] = {}
         already_fixed = False
-        params = _variant_params(plan, variant)
+        # sweep_budget 是 (cfg, adapter) 的纯函数，在本方法内重算——
+        # 不能引用 _plan_variants 那个作用域里的同名局部变量（那是另一个方法）。
+        sweep_budget = _sweep_budget(self.ctx.cfg, adapter)
+        params = _variant_params(plan, variant, adapter, sweep_budget)
 
         for seed in seeds:
             out_dir = f"runs/{variant}/seed_{seed}"
@@ -820,7 +832,71 @@ def _variant_budget(cfg: Any, adapter: Any) -> int:
     return max(2, min(configured, cap)) if cap > 0 else configured
 
 
-def _plan_variants(plan: dict[str, Any], max_variants: int | None = 2) -> list[str]:
+
+# --------------------------------------------------------------------------- #
+# 多参数扫描
+# --------------------------------------------------------------------------- #
+def _sweep_plan(adapter: Any, max_runs: int | None) -> Any:
+    """按适配器声明的轴展开扫描方案。返回 ``None`` 表示本适配器不做扫描。
+
+    **纯函数**：``_plan_variants`` 与 ``_variant_params`` 各自重算，
+    不往 s3 的 plan 里塞派生状态（那会污染上游产物）。
+    """
+    axes = None
+    try:
+        axes = adapter.sweep_axes()
+    except Exception:  # noqa: BLE001 - 适配器声明失败不应拖垮阶段
+        axes = None
+    if not axes:
+        return None
+    from ..adapters.sweep import expand_sweep
+
+    mode = "ofat"
+    try:
+        mode = str(adapter.sweep_mode() or "ofat")
+    except Exception:  # noqa: BLE001
+        mode = "ofat"
+    budget = max_runs
+    try:
+        cap = int(getattr(adapter, "max_sweep_runs", 24) or 24)
+    except Exception:  # noqa: BLE001
+        cap = 24
+    if budget is None:
+        budget = cap
+    else:
+        budget = min(int(budget), cap)
+    return expand_sweep(tuple(axes), mode=mode, max_runs=budget)
+
+
+def _sweep_budget(cfg: Any, adapter: Any) -> int:
+    """扫描运行数预算：配置与适配器取较小值（默认 24）。"""
+    try:
+        cfg_value = int(getattr(cfg, "max_sweep_runs", 24) or 24)
+    except Exception:  # noqa: BLE001
+        cfg_value = 24
+    return max(2, cfg_value)
+
+
+def _sweep_variant_names(plan_obj: Any) -> list[str]:
+    """扫描模式下的变体名。
+
+    **参考格点命名为 ``baseline``**，其余为 ``sw-<n>``。
+    理由：材料参数研究问的不是"新方法 vs 基线"，而是"相对参考条件的偏离"，
+    而把参考点叫 baseline 既贴合语义，又能直接复用既有的对照逻辑——
+    不必为扫描另写一套比较代码，也就不会出现"两套比较口径"的经典漂移。
+    """
+    cells = list(getattr(plan_obj, "cells", []) or [])
+    if not cells:
+        return []
+    return ["baseline"] + [f"sw-{i}" for i in range(1, len(cells))]
+
+
+def _plan_variants(
+    plan: dict[str, Any],
+    max_variants: int | None = 2,
+    adapter: Any = None,
+    sweep_budget: int | None = None,
+) -> list[str]:
     """从实验计划推导要跑哪些**变体**。
 
     两类变体，语义完全不同，不能混为一谈：
@@ -836,6 +912,14 @@ def _plan_variants(plan: dict[str, Any], max_variants: int | None = 2) -> list[s
     注意早期实现把整数当成「只返回主对照」，于是 ``max_variants=4`` 与 ``=2``
     返回同样的东西——用户要求跑 4 个臂却只拿到 2 个，而且不会有任何提示。
     """
+    # 参数扫描是另一种实验设计：变体是网格格点，不是"方法 vs 基线"。
+    # 优先走它（适配器声明了轴就说明它要扫描）。
+    if adapter is not None:
+        sweep = _sweep_plan(adapter, sweep_budget)
+        names = _sweep_variant_names(sweep) if sweep is not None else []
+        if names:
+            return names
+
     primary: list[str] = ["baseline", "method"]
     if max_variants is not None and max_variants <= 2:
         return primary[: max(1, max_variants)]
@@ -917,13 +1001,31 @@ def _safe_variant(raw: str) -> str:
     return name[:48]
 
 
-def _variant_params(plan: dict[str, Any], variant: str) -> dict[str, Any]:
+def _variant_params(
+    plan: dict[str, Any],
+    variant: str,
+    adapter: Any = None,
+    sweep_budget: int | None = None,
+) -> dict[str, Any]:
     """给某个变体取出该应用的超参。
 
-    主对照（baseline/method）返回空 dict——它们必须用**同一套默认超参**，
-    否则「提升」就归因不到方法本身。
-    消融格点返回 ``{轴名: 取值}``，让适配器把它变成命令行参数。
+    三类变体，参数来源不同：
+
+    * **扫描格点**（``baseline`` + ``sw-<n>``，仅当适配器声明了扫描轴）：
+      取自扫描方案。注意 **``baseline`` 在这里是"参考条件"，不是"默认参数"**——
+      它同样要拿到参考格点的取值序列。否则对照会变成
+      "模块默认 vs 被改过的参数"，而不是"参考条件 vs 偏离参考条件"。
+    * **主对照**（消融模式下）返回空 dict——它们必须用**同一套默认超参**，
+      否则「提升」就归因不到方法本身。
+    * **消融格点**返回 ``{轴名: 取值}``，让适配器把它变成命令行参数。
     """
+    if adapter is not None:
+        sweep = _sweep_plan(adapter, sweep_budget)
+        if sweep is not None:
+            names = _sweep_variant_names(sweep)
+            if variant in names:
+                cell = sweep.cells[names.index(variant)]
+                return dict(cell)
     for label, _axis, _value, params in _ablation_cells(plan):
         if _safe_variant(label) == variant or label == variant:
             return dict(params)

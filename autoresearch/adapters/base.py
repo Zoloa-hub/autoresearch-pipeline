@@ -363,6 +363,38 @@ class BaseExperimentAdapter(ABC):
         )
 
     # -- 供 s4 构造代码生成提示词 --------------------------------------- #
+    #: 单次参数扫描的运行数上限（可由配置收紧，取两者较小值）
+    max_sweep_runs: int = 24
+
+    #: 默认扫描设计：``"ofat"``（一次一条轴，便宜但测不出交互）
+    #: 或 ``"grid"``（全组合，能测交互但组合爆炸）。
+    default_sweep_mode: str = "ofat"
+
+    def sweep_axes(self) -> tuple[Any, ...] | None:
+        """声明可扫描的参数轴。返回 ``None`` = 本适配器不支持参数扫描。
+
+        材料/化学/器件研究最常见的实验形态就是参数扫描（温度 × 成分 × 退火时间），
+        而它和"方法 vs 基线"是**两种不同的实验设计**：
+
+        * 对照实验问"新方法是否更好" → 变体是离散的臂
+        * 参数扫描问"哪个因素主导、最优条件在哪" → 变体是网格上的格点
+
+        声明轴之后，管线会按 ``default_sweep_mode`` 展开成格点，
+        并把每个格点的参数通过 :attr:`RunSpec.params` 交给
+        :meth:`build_command` —— 适配器负责把它变成自己认识的命令行参数。
+
+        返回 ``SweepAxis`` 的元组（见 :mod:`autoresearch.adapters.sweep`）。
+        """
+        return None
+
+    def sweep_mode(self) -> str:
+        """本适配器倾向的扫描设计：``"ofat"`` 或 ``"grid"``。
+
+        选 ``"grid"`` 前请确认预算：``Π kᵢ`` 增长极快（5×4×3 = 60），
+        而超预算截断会**破坏正交性**、使主效应与交互效应混淆。
+        """
+        return self.default_sweep_mode
+
     def metric_directions(self) -> dict[str, bool] | None:
         """声明本适配器产出的指标方向：``{指标名: 越大越好?}``。
 
