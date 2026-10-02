@@ -226,6 +226,15 @@ class IdeationStage(Stage):
         candidates: list[dict[str, Any]] = []
         try:
             found = self.ctx.search.search(query, max_results=6)
+            if not found:
+                # **零结果必须可见。**
+                # 查新在空候选集上会给出"novel"，而那正是它最该避免的结论
+                # （提示词自己写着"默认失败模式是高估新颖性"）。
+                # 实测：检索式是词袋 + 含 schema 碎片时，arXiv 稳定返回 0 条。
+                warnings.append(
+                    f"查新检索零结果（idea={idea.get('id')}，query={query!r}）——"
+                    "该 idea 的新颖性缺少候选文献支撑，结论应视为 unknown 而非 novel"
+                )
             candidates = [p.to_dict() for p in found]
         except Exception as exc:
             self._warn(f"s2: novelty retrieval failed for {idea['id']}: {exc}")
@@ -423,19 +432,95 @@ def _merge_papers(a: list[dict[str, Any]], b: list[dict[str, Any]]) -> list[dict
     return out
 
 
+#: 构造检索式时要跳过的词。
+#:
+#: 分三类，第二类是本项目实测踩到的坑：
+#:   1. 通用虚词与泛化名词
+#:   2. **schema 字段名与引用格式碎片** —— 实测泄漏进检索式的有
+#:      ``venue``（输出契约的字段名）、``cite``/``doi``/``iii``（引用格式碎片）。
+#:      它们与主题无关，却会被当成关键词发出去。
+#:   3. 论文写作的元词
+_QUERY_STOPWORDS = frozenset({
+    # 1) 通用
+    "the", "and", "for", "with", "that", "this", "are", "was", "were", "can", "not",
+    "which", "when", "from", "into", "using", "based", "via", "its", "our", "their",
+    "than", "then", "also", "such", "more", "most", "less", "very", "both", "each",
+    "method", "model", "models", "approach", "approaches", "results", "result",
+    "performance", "study", "paper", "work", "works", "novel", "new", "propose",
+    "proposed", "proposes", "show", "shows", "shown", "find", "finds", "found",
+    # 2) schema 字段名 / 引用格式碎片（实测泄漏）
+    "venue", "cite", "cited", "cites", "citation", "doi", "arxiv", "et", "al",
+    "string", "bool", "boolean", "float", "int", "integer", "array", "object",
+    "json", "schema", "field", "fields", "type", "types", "value", "values",
+    "title", "abstract", "hypothesis", "claim", "claims", "score", "scores",
+    "verdict", "rationale", "overlap", "risks", "differentiators", "closest",
+    "i", "ii", "iii", "iv", "v", "vi", "regime", "regimes",
+    # 3) 写作元词
+    "however", "therefore", "moreover", "furthermore", "thus", "hence",
+    "figure", "figures", "table", "tables", "section", "sections", "eq", "equation",
+})
+
+#: 一个 token 至少要有这么多字母才算"词"（滤掉 "s"、"e.g" 这类碎片）
+_MIN_TOKEN_ALNUM = 3
+
+
+def _query_tokens(text: str) -> list[str]:
+    r"""从文本里取出可用的检索关键词。
+
+    **不再用 ASCII-only 正则切词。** 早期实现用 ``[A-Za-z][A-Za-z\-]{2,}``，
+    于是 ``Körmer`` 被剥掉 ``ö`` 只剩 ``rmer``——作者名被砍成无意义片段，
+    检索必然失败。实测在 s2 的检索式里出现过 ``rmer``。
+
+    现在：按 Unicode 字母取词，拉丁字母 + 组合变音符一并保留；
+    若一个词去掉非 ASCII 后长度不足，则**整词丢弃**（宁可少一个词，
+    也不要发出一个被腰斩的假词）。
+    """
+    tokens: list[str] = []
+    for raw in re.findall(r"[^\W\d_]+(?:[-'’][^\W\d_]+)*", text, flags=re.UNICODE):
+        word = raw.strip("-'’")
+        if not word:
+            continue
+        # 纯 ASCII 长度（用于判断"去掉非 ASCII 后还剩多少"）
+        ascii_len = sum(1 for ch in word if ch.isascii() and ch.isalpha())
+        if ascii_len < _MIN_TOKEN_ALNUM:
+            # 形如 "rmer"（原词是 Körmer）或 "ller"（原词是 Müller）——
+            # 无法判断它原本是什么，丢弃比发出去安全
+            continue
+        if word.lower() in _QUERY_STOPWORDS:
+            continue
+        tokens.append(word)
+    return tokens
+
+
 def _idea_query(idea: dict[str, Any], direction: str) -> str:
-    """构造查新检索式：标题/方法关键词优先，落回研究大方向。"""
-    text = " ".join(
-        str(idea.get(k) or "") for k in ("title", "hypothesis", "method_sketch", "novelty_claim")
-    )
-    words = [w for w in re.findall(r"[A-Za-z][A-Za-z\-]{2,}", text)]
-    # 去掉过于通用的词
-    generic = {"the", "and", "for", "with", "that", "this", "are", "was", "can", "not",
-               "which", "when", "from", "into", "using", "based", "method", "model",
-               "approach", "results", "performance"}
-    keywords = _dedupe_preserve([w for w in words if w.lower() not in generic])[:8]
-    if keywords:
-        return " ".join(keywords)
+    """构造查新检索式。
+
+    **以 title 为主**，而不是把四个字段拼成散文再取前 8 个词。
+
+    原因：四个字段混在一起后，按文档顺序取词得到的是**无序词袋**
+    ——实测产出 ``'Hamilton PINN Jacobi Pareto Earth Moon Sun MLP'``
+    这种把标题词、方法词、天体名混在一起的东西，arXiv 返回 0 是必然的。
+    title 本身最接近一个检索式，也最能代表 idea 的主题。
+
+    有效关键词少于 2 个时落回 ``direction``——宁可检索得宽一点，
+    也不要发出一个注定 0 结果的查询（那会让查新在空候选集上做判断）。
+    """
+    title = str(idea.get("title") or "")
+    keywords = _dedupe_preserve(_query_tokens(title))[:8]
+
+    if len(keywords) < 2:
+        # title 太短或全被过滤 —— 用 hypothesis 补充
+        extra = _dedupe_preserve(
+            _query_tokens(str(idea.get("hypothesis") or ""))
+        )
+        for word in extra:
+            if word not in keywords:
+                keywords.append(word)
+            if len(keywords) >= 6:
+                break
+
+    if len(keywords) >= 2:
+        return " ".join(keywords[:8])
     return direction
 
 
